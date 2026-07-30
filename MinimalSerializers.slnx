@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/MinimalSerializers.Json.Benchmarks/MinimalSerializers.Json.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Sample.Contracts/Sample.Contracts.csproj" />
+    <Project Path="samples/Sample.Host/Sample.Host.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/MinimalSerializers.Json.Discovery/MinimalSerializers.Json.Discovery.csproj" />
+    <Project Path="src/MinimalSerializers.Json.Tasks/MinimalSerializers.Json.Tasks.csproj" />
+    <Project Path="src/MinimalSerializers.Json/MinimalSerializers.Json.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MinimalSerializers.Json.Package.Tests/MinimalSerializers.Json.Package.Tests.csproj" />
+    <Project Path="tests/MinimalSerializers.Json.Tests/MinimalSerializers.Json.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,92 @@
+<Project>
+  <PropertyGroup>
+    <!-- Packaged location -->
+    <MinimalJson_TaskAssembly
+      Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)../tasks/net8.0/MinimalSerializers.Json.Tasks.dll')">
+      $(MSBuildThisFileDirectory)../tasks/net8.0/MinimalSerializers.Json.Tasks.dll</MinimalJson_TaskAssembly>
+    <!-- Repo / project-reference location -->
+    <_MinimalJson_RepoTaskCandidate>
+      $(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/$(Configuration)/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate>
+    <_MinimalJson_RepoTaskCandidate2>
+      $(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/Debug/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate2>
+    <MinimalJson_TaskAssembly
+      Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_RepoTaskCandidate)')">
+      $(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>
+    <MinimalJson_TaskAssembly
+      Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_RepoTaskCandidate2)')">
+      $(_MinimalJson_RepoTaskCandidate2)</MinimalJson_TaskAssembly>
+    <_MinimalJson_BaseOut Condition="'$(IntermediateOutputPath)' != ''">$(IntermediateOutputPath)</_MinimalJson_BaseOut>
+    <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">
+      $(BaseIntermediateOutputPath)$(Configuration)/$(TargetFramework)/</_MinimalJson_BaseOut>
+    <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">obj/$(Configuration)/</_MinimalJson_BaseOut>
+    <MinimalJson_GeneratedDir>$(_MinimalJson_BaseOut)minimaljson/</MinimalJson_GeneratedDir>
+  </PropertyGroup>
+
+  <UsingTask TaskName="MinimalSerializers.Json.Tasks.GenerateMinimalJsonSerializerContexts"
+    AssemblyFile="$(MinimalJson_TaskAssembly)"
+    Condition="'$(MinimalJson_TaskAssembly)' != '' and Exists('$(MinimalJson_TaskAssembly)')" />
+
+  <Target Name="MinimalJson_EnsureTasksBuilt"
+    BeforeTargets="MinimalJson_GenerateContexts"
+    Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(MinimalJson_TaskAssembly)' == '' or !Exists('$(MinimalJson_TaskAssembly)'))">
+    <PropertyGroup>
+      <_MinimalJson_TasksProject>
+        $(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/MinimalSerializers.Json.Tasks.csproj</_MinimalJson_TasksProject>
+    </PropertyGroup>
+    <MSBuild Projects="$(_MinimalJson_TasksProject)"
+      Targets="Build"
+      Properties="Configuration=$(Configuration);TargetFramework=net8.0"
+      Condition="Exists('$(_MinimalJson_TasksProject)')" />
+    <PropertyGroup>
+      <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_RepoTaskCandidate)')">
+        $(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>
+      <MinimalJson_TaskAssembly
+        Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_RepoTaskCandidate2)')">
+        $(_MinimalJson_RepoTaskCandidate2)</MinimalJson_TaskAssembly>
+    </PropertyGroup>
+  </Target>
+
+  <!-- Generate only when inputs change. -->
+  <Target Name="MinimalJson_GenerateContexts"
+    BeforeTargets="BeforeCompile;CoreCompile"
+    DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt"
+    Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != '' and Exists('$(MinimalJson_TaskAssembly)')"
+    Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath)"
+    Outputs="$(MinimalJson_GeneratedDir)stamp.minimaljson">
+    <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
+    <ItemGroup>
+      <_MinimalJson_References Include="@(ReferencePath)" />
+      <_MinimalJson_References Include="@(ReferencePathWithRefAssemblies)" />
+      <_MinimalJson_References Include="@(RuntimeCopyLocalItems)"
+        Condition="'@(RuntimeCopyLocalItems)' != ''" />
+    </ItemGroup>
+    <GenerateMinimalJsonSerializerContexts
+      CompileFiles="@(Compile)"
+      ReferencePaths="@(_MinimalJson_References)"
+      OutputDirectory="$(MinimalJson_GeneratedDir)"
+      LangVersion="$(LangVersion)"
+      IncludeArrays="$(MinimalJsonEmitArrays)"
+      IncludeList="$(MinimalJsonEmitList)"
+      IncludeDeclaredCollectionInterfaces="$(MinimalJsonEmitDeclaredCollections)"
+      IncludeDictionaries="$(MinimalJsonEmitDictionaries)">
+      <Output TaskParameter="GeneratedFiles" ItemName="MinimalJsonGenerated" />
+    </GenerateMinimalJsonSerializerContexts>
+    <ItemGroup>
+      <FileWrites Include="@(MinimalJsonGenerated)" />
+      <FileWrites Include="$(MinimalJson_GeneratedDir)stamp.minimaljson" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Always include generated files in Compile, even when generation target is skipped as
+  up-to-date. -->
+  <Target Name="MinimalJson_IncludeGenerated"
+    BeforeTargets="BeforeCompile;CoreCompile"
+    DependsOnTargets="MinimalJson_GenerateContexts"
+    Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
+    <ItemGroup>
+      <Compile Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs"
+        Condition="Exists('$(MinimalJson_GeneratedDir)')"
+        KeepDuplicates="false" />
+    </ItemGroup>
+  </Target>
+</Project>

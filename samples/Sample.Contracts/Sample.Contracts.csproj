@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Sample.Contracts</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MinimalSerializers.Json\MinimalSerializers.Json.csproj" />
+  </ItemGroup>
+  <Import Project="..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.props" Condition="Exists('..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.props')" />
+  <Import Project="..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.targets" Condition="Exists('..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.targets')" />
+</Project>

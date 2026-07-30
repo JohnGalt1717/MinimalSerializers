@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>MinimalSerializers.Json.Benchmarks</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MinimalSerializers.Json\MinimalSerializers.Json.csproj" />
+  </ItemGroup>
+  <Import Project="..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.props" Condition="Exists('..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.props')" />
+  <Import Project="..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.targets" Condition="Exists('..\..\src\MinimalSerializers.Json\build\MinimalSerializers.Json.targets')" />
+</Project>
+
