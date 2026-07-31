@@ -141,25 +141,34 @@ So the fair comparison is three paths on the same payload:
 | **Manual STJ** | Complete hand-maintained `[JsonSerializable(typeof(...))]` context (the maintenance pain) |
 | **MinimalSerializers** | Same STJ source-gen path as manual, but roots are discovered automatically |
 
+Benchmarks use a warmed order with 64 line items and include both:
+
+- options/resolver-chain APIs (`Serialize(value, options)` / `Deserialize<T>(json, options)`)
+- typed source-gen APIs (`Serialize(value, Context.Default.T)` / `Deserialize(json, Context.Default.T)`)
+
 ### Results
 
-Representative numbers from `benchmarks/MinimalSerializers.Json.Benchmarks` on .NET 11 / Apple M4 Max (InProcess, warmed options):
+Representative numbers from `benchmarks/MinimalSerializers.Json.Benchmarks` on .NET 11 / Apple M4 Max (InProcess, warmed):
 
 | Method | Mean | Allocated | vs reflection serialize |
 | -------- | -----: | ----------: | ------------------------: |
-| **Reflection_Serialize** (baseline) | 1,241 ns | 760 B | 1.00× |
-| ManualStj_Serialize | 798 ns | 449 B | **0.64×** |
-| MinimalStj_Serialize | 783 ns | 449 B | **0.63×** |
-| Reflection_Deserialize | 2,002 ns | 1,137 B | 1.61× |
-| ManualStj_Deserialize | 2,766 ns | 1,593 B | 2.23× |
-| MinimalStj_Deserialize | 2,767 ns | 1,593 B | 2.23× |
+| **Reflection_Serialize** (baseline) | 21.1 µs | 5.65 KB | 1.00× |
+| ManualStj_Serialize | 9.4 µs | 5.34 KB | 0.55× |
+| MinimalStj_Serialize | 11.0 µs | 5.34 KB | 0.64× |
+| ManualStj_Serialize_TypeInfo | **3.5 µs** | 5.34 KB | **0.20×** |
+| MinimalStj_Serialize_TypeInfo | **4.4 µs** | 5.34 KB | **0.25×** |
+| Reflection_Deserialize | 11.2 µs | 11.2 KB | 0.65× |
+| ManualStj_Deserialize | 15.1 µs | 18.4 KB | 0.88× |
+| MinimalStj_Deserialize | 14.1 µs | 18.4 KB | 0.81× |
+| ManualStj_Deserialize_TypeInfo | 15.7 µs | 18.4 KB | 0.91× |
+| MinimalStj_Deserialize_TypeInfo | 14.5 µs | 18.4 KB | 0.84× |
 
 ### Takeaways
 
 1. **Minimal ≈ Manual** on both serialize and deserialize (within noise). That is the point: you get the **source-generated STJ path** without typing every root and every `T[]` / `List<T>` by hand.
-2. **Serialize is clearly faster and leaner than reflection** (~1.6× throughput, ~40% less allocation) for both manual and Minimal contexts.
-3. **Deserialize allocations track the generated contract metadata**, so STJ source-gen is not always a free lunch vs reflection on tiny graphs — but Manual and Minimal stay locked together. If you already accept manual STJ for AOT/trimming/ASP.NET root coverage, Minimal does not cost extra at runtime.
-4. The product win is **authoring and maintenance**: one `[MinimalJsonSerializerContext]` partial instead of a brittle, ever-growing attribute list — **at the same speed as the hand-written context**.
+2. **Serialize is a clear win** for source-gen. Prefer the typed API (`Context.Default.MyDto`) when you can; it is roughly **4–6× faster** than reflection here. Options-based source-gen is still about **2× faster** than reflection.
+3. **Deserialize is not automatically faster than reflection** on warm, property-based DTOs. Reflection’s cached metadata path can allocate less and finish sooner on this shape. Manual and Minimal stay locked together, so the gap is STJ source-gen vs reflection — **not Minimal overhead**.
+4. Prefer source-gen anyway for **AOT/trimming**, ASP.NET root coverage (`T` / `T[]` / `List<T>`), and predictable startup. Minimal’s product win is **authoring**: one `[MinimalJsonSerializerContext]` partial instead of a brittle attribute list, **at the same runtime speed as the hand-written context**.
 
 ```bash
 dotnet run --project benchmarks/MinimalSerializers.Json.Benchmarks -c Release

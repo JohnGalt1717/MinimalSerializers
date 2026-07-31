@@ -10,6 +10,9 @@ namespace MinimalSerializers.Json.Benchmarks;
 /// 1. Reflection — stock <see cref="DefaultJsonTypeInfoResolver"/> (no source-gen context).
 /// 2. Manual STJ — complete hand-written <c>[JsonSerializable]</c> context.
 /// 3. Minimal STJ — context roots emitted by MinimalSerializers; serializers still from stock STJ SG.
+///
+/// Also compares options-based deserialize vs the typed JsonTypeInfo overload
+/// (Context.Default.T), which is the fastest source-gen entry point.
 /// </summary>
 [MemoryDiagnoser]
 [Orderer(SummaryOrderPolicy.Method)]
@@ -21,62 +24,60 @@ public class SerializationBenchmarks
     private JsonSerializerOptions _reflection = null!;
     private JsonSerializerOptions _manual = null!;
     private JsonSerializerOptions _minimal = null!;
+    private JsonTypeInfo<BenchOrder> _manualTypeInfo = null!;
+    private JsonTypeInfo<BenchOrder> _minimalTypeInfo = null!;
 
     [GlobalSetup]
     public void Setup()
     {
+        // Larger than a toy DTO so parse+graph work is meaningful, but still a
+        // realistic order-shaped payload (not pathological).
+        var items = new List<BenchItem>(64);
+        for (var i = 0; i < 64; i++)
+        {
+            items.Add(
+                new BenchItem
+                {
+                    Id = i,
+                    Name = $"Item-{i:D3}",
+                    Price = 1.5m + i,
+                }
+            );
+        }
+
         _order = new BenchOrder
         {
             Id = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
             Customer = "Customer",
             CreatedAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
-            Items =
-            [
-                new BenchItem
-                {
-                    Id = 1,
-                    Name = "A",
-                    Price = 1.5m,
-                },
-                new BenchItem
-                {
-                    Id = 2,
-                    Name = "B",
-                    Price = 2.5m,
-                },
-                new BenchItem
-                {
-                    Id = 3,
-                    Name = "C",
-                    Price = 3.5m,
-                },
-            ],
+            Items = items,
         };
 
-        // Path without MinimalSerializers / without any JsonSerializerContext:
-        // plain web defaults + reflection type info.
         _reflection = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
 
-        // Hand-maintained complete [JsonSerializable] list (the pain this package removes).
         _manual = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             TypeInfoResolver = ManualBenchContext.Default,
         };
 
-        // MinimalSerializers-discovered roots → same STJ source generator as manual.
         _minimal = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             TypeInfoResolver = MinimalBenchContext.Default,
         };
 
-        // Warm each path once so first-use reflection metadata cost is not in the timed loop.
+        _manualTypeInfo = ManualBenchContext.Default.BenchOrder;
+        _minimalTypeInfo = MinimalBenchContext.Default.BenchOrder;
+
+        // Warm each path once so first-use reflection metadata cost is not timed.
         _ = JsonSerializer.Serialize(_order, _reflection);
         _ = JsonSerializer.Serialize(_order, _manual);
-        _json = JsonSerializer.Serialize(_order, _minimal);
+        _json = JsonSerializer.Serialize(_order, _minimalTypeInfo);
         _ = JsonSerializer.Deserialize<BenchOrder>(_json, _reflection);
+        _ = JsonSerializer.Deserialize(_json, _manualTypeInfo);
+        _ = JsonSerializer.Deserialize(_json, _minimalTypeInfo);
         _ = JsonSerializer.Deserialize<BenchOrder>(_json, _manual);
         _ = JsonSerializer.Deserialize<BenchOrder>(_json, _minimal);
     }
@@ -92,7 +93,15 @@ public class SerializationBenchmarks
     [Benchmark]
     public string MinimalStj_Serialize() => JsonSerializer.Serialize(_order, _minimal);
 
-    // --- Deserialize ---
+    [Benchmark]
+    public string ManualStj_Serialize_TypeInfo() =>
+        JsonSerializer.Serialize(_order, _manualTypeInfo);
+
+    [Benchmark]
+    public string MinimalStj_Serialize_TypeInfo() =>
+        JsonSerializer.Serialize(_order, _minimalTypeInfo);
+
+    // --- Deserialize (options / resolver chain; fair vs reflection) ---
 
     [Benchmark]
     public BenchOrder? Reflection_Deserialize() =>
@@ -105,4 +114,14 @@ public class SerializationBenchmarks
     [Benchmark]
     public BenchOrder? MinimalStj_Deserialize() =>
         JsonSerializer.Deserialize<BenchOrder>(_json, _minimal);
+
+    // --- Deserialize (typed JsonTypeInfo; preferred source-gen API) ---
+
+    [Benchmark]
+    public BenchOrder? ManualStj_Deserialize_TypeInfo() =>
+        JsonSerializer.Deserialize(_json, _manualTypeInfo);
+
+    [Benchmark]
+    public BenchOrder? MinimalStj_Deserialize_TypeInfo() =>
+        JsonSerializer.Deserialize(_json, _minimalTypeInfo);
 }

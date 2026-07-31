@@ -1,4 +1,5 @@
 **/*.targets
 **/*.props
+**/*.csproj
 **/obj/**
 **/bin/**
