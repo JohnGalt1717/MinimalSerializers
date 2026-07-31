@@ -213,81 +213,66 @@ dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj -c Releas
 ## Publishing to NuGet
 
 Package id: **`MinimalSerializers.Json`**  
-Version source: `PACKAGE_VERSION` in `.env`, else current/latest git tag `v*`, else `1.0.0`.  
-Default `VersionPrefix` in `Directory.Build.props` is `1.0.0`.
+Primary path: **Trusted Publishing** via GitHub Actions OIDC (no long-lived NuGet API key).  
+Workflow file: **`.github/workflows/release.yml`**  
+Workflow file name for nuget.org policy: **`release.yml`** (file name only).
 
-Local publish reads secrets from **`.env`** (gitignored). Tracked template: **`.env.example`**.
+Version comes from the git tag (`v1.0.0` → `1.0.0`).
 
-### 1) Create a NuGet.org API key
+### Recommended: Trusted Publishing (release workflow)
 
-1. Sign in at [nuget.org](https://www.nuget.org/) (Microsoft account).
-2. Open **Account settings → API Keys**:  
-   https://www.nuget.org/account/apikeys
-3. Click **Create**.
-4. Recommended fields:
-   - **Key name:** `MinimalSerializers local` (or `GitHub Actions`)
-   - **Expires:** your choice (90 days is fine; create a long-lived one only if you must)
-   - **Select Scopes:** **Push** → **Push new packages and package versions**
-   - **Select Packages:** **Glob pattern** → `MinimalSerializers.Json`
-   - Leave select organizations empty unless the package should own under an org
-5. Create the key and **copy it immediately** (NuGet shows it once).
+#### 1) Configure nuget.org trusted policy
 
-### 2) Put the key in `.env`
+1. Sign in at [nuget.org](https://www.nuget.org/).
+2. Open your username menu → **Trusted Publishing**  
+   (direct: <https://www.nuget.org/account/trusted-publishing> if available).
+3. **Add a new trusted publishing policy** with:
+
+| Field | Value |
+| --- | --- |
+| **Repository Owner** | `JohnGalt1717` |
+| **Repository** | `MinimalSerializers` |
+| **Workflow File** | `release.yml` |
+| **Environment** | *(leave empty — this workflow does not use a GitHub Environment)* |
+
+Owner can be your user or an organization that owns the package.
+
+> Enter **`release.yml` only** — do **not** include `.github/workflows/`.
+
+#### 2) Set your nuget.org username on the GitHub repo
+
+`NuGet/login` needs your **nuget.org profile username** (not email):
 
 ```bash
-cp .env.example .env
+# replace with your nuget.org profile name
+gh variable set NUGET_USER -R JohnGalt1717/MinimalSerializers --body "YOUR_NUGET_ORG_USERNAME"
 ```
 
-Edit `.env` and set:
+#### 3) Tag a release
 
 ```bash
-NUGET_API_KEY=oy2...your_real_key...
-```
-
-Optional:
-
-```bash
-PACKAGE_VERSION=1.0.0
-NUGET_SOURCE=https://api.nuget.org/v3/index.json
-CONFIGURATION=Release
-```
-
-`.env` is gitignored. Never commit it.
-
-### 3) Publish locally (uses `.env`)
-
-```bash
-# pack + test + push using scripts/publish-nuget.sh
-./scripts/publish-nuget.sh
-
-# pack only (no push)
-PUSH=false ./scripts/publish-nuget.sh
-
-# override version for this run
-PACKAGE_VERSION=1.0.0 ./scripts/publish-nuget.sh
-```
-
-The script:
-
-1. loads `NUGET_API_KEY` from `.env`
-2. restores / builds Release
-3. runs unit + package tests
-4. packs `MinimalSerializers.Json` to `artifacts/packages/`
-5. runs `dotnet nuget push` to nuget.org (`--skip-duplicate`)
-
-### 4) Optional: also enable GitHub tag releases
-
-For `.github/workflows/release.yml` (push tag `v1.0.0`):
-
-```bash
-# upload the same key as a repo secret (reads from .env without printing it)
-set -a && source .env && set +a
-printf '%s' "$NUGET_API_KEY" | gh secret set NUGET_API_KEY -R JohnGalt1717/MinimalSerializers
-
+git checkout main
+git pull
 git tag v1.0.0
 git push origin v1.0.0
 gh run watch --repo JohnGalt1717/MinimalSerializers
 ```
+
+The `release` workflow will:
+
+1. build + test
+2. pack `MinimalSerializers.Json`
+3. exchange a GitHub OIDC token for a **temporary** nuget.org API key (`NuGet/login@v1`)
+4. `dotnet nuget push`
+5. create a GitHub Release with the nupkg/snupkg attached
+
+### Optional: local publish with API key (`.env`)
+
+For emergency/local pushes only:
+
+1. Create a classic API key at <https://www.nuget.org/account/apikeys>
+2. `cp .env.example .env` and set `NUGET_API_KEY=...`
+3. `./scripts/publish-nuget.sh`
 
 ### Verify publish
 
@@ -298,9 +283,10 @@ curl -s https://api.nuget.org/v3-flatcontainer/minimalserializers.json/index.jso
 
 ### Notes
 
+- Trusted Publishing temporary keys last about **1 hour**; login runs immediately before push.
 - `--skip-duplicate` makes re-runs safe if that version already exists.
 - Symbols ship as `.snupkg` next to the `.nupkg`.
-- Rotate any key that may have been exposed in shell history or logs.
+- Private repos may show a temporarily active policy until the first successful publish.
 
 ## License
 
