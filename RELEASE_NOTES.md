@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.0.1
+
+- Ship package README and release notes on nuget.org
+- README cleanup: generic samples/docs; publishing moved to PUBLISHING.md
+
 ## 1.0.0
 
 - Initial release of MinimalSerializers.Json

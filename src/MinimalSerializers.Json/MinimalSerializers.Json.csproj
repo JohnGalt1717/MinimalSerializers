@@ -19,8 +19,15 @@
     <None Include="build\MinimalSerializers.Json.targets" Pack="true" PackagePath="buildTransitive/MinimalSerializers.Json.targets" />
     <None Include="build\MinimalSerializers.Json.props" Pack="true" PackagePath="build/MinimalSerializers.Json.props" />
     <None Include="build\MinimalSerializers.Json.targets" Pack="true" PackagePath="build/MinimalSerializers.Json.targets" />
-    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" PackageCopyToOutput="false" />
+    <None Include="..\..\RELEASE_NOTES.md" Pack="true" PackagePath="RELEASE_NOTES.md" />
   </ItemGroup>
+
+  <Target Name="MinimalJson_SetPackageReleaseNotes" BeforeTargets="GenerateNuspec;_GetPackageFiles" Condition="Exists('$(MSBuildThisFileDirectory)..\..\RELEASE_NOTES.md')">
+    <PropertyGroup>
+      <PackageReleaseNotes>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\RELEASE_NOTES.md'))</PackageReleaseNotes>
+    </PropertyGroup>
+  </Target>
 
   <Target Name="MinimalJson_IncludeTaskAssets" BeforeTargets="_GetPackageFiles" Condition="'$(IsPackable)' == 'true'">
     <!-- Build task assets only when missing. Nested Build under pack NoBuild hits NETSDK1085. -->
