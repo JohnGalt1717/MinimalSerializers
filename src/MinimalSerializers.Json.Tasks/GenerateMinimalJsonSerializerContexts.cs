@@ -154,12 +154,28 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
                 }
             }
 
-            // Stamp file for incremental builds.
-            var stamp = Path.Combine(OutputDirectory, "stamp.minimaljson");
-            File.WriteAllText(stamp, DateTime.UtcNow.ToString("O"));
-
             GeneratedFiles = generated.ToArray();
-            return !Log.HasLoggedErrors;
+
+            // Never stamp a failed or empty-but-expected generation run. A stamp without
+            // *.MinimalJson.g.cs makes the MSBuild target look up-to-date forever.
+            if (Log.HasLoggedErrors)
+            {
+                DeleteStamp(OutputDirectory);
+                return false;
+            }
+
+            if (result.Contexts.Any(static c => c.IsPartial && c.DerivesFromJsonSerializerContext)
+                && generated.Count == 0)
+            {
+                Log.LogError(
+                    "MSJ0006: MinimalJson contexts were discovered but no generated sources were written."
+                );
+                DeleteStamp(OutputDirectory);
+                return false;
+            }
+
+            WriteStamp(OutputDirectory, generated);
+            return true;
         }
         catch (Exception ex)
         {
@@ -209,6 +225,33 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
         File.WriteAllText(tmp, content, Encoding.UTF8);
         File.Copy(tmp, path, overwrite: true);
         File.Delete(tmp);
+    }
+
+    private static void WriteStamp(string outputDirectory, List<ITaskItem> generated)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var stamp = Path.Combine(outputDirectory, "stamp.minimaljson");
+        var payload = new StringBuilder();
+        payload.AppendLine(DateTime.UtcNow.ToString("O"));
+        foreach (
+            var path in generated
+                .Select(static g => g.ItemSpec)
+                .OrderBy(static p => p, StringComparer.OrdinalIgnoreCase)
+        )
+        {
+            payload.AppendLine(path);
+        }
+
+        File.WriteAllText(stamp, payload.ToString(), Encoding.UTF8);
+    }
+
+    private static void DeleteStamp(string outputDirectory)
+    {
+        var stamp = Path.Combine(outputDirectory, "stamp.minimaljson");
+        if (File.Exists(stamp))
+        {
+            File.Delete(stamp);
+        }
     }
 
     private static void TryAddReference(List<MetadataReference> references, string? path)

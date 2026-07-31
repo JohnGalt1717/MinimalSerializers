@@ -105,7 +105,7 @@ Also registers closed collection/dictionary shapes found on members when enabled
 ### Conventions
 
 | Mark | Role |
-|------|------|
+| ------ | ------ |
 | `[DataContract]` | Include type in discovery |
 | `[DataMember]` | Include member in graph walk (if any DataMembers exist on the type) |
 | `[IgnoreDataMember]` / `[JsonIgnore]` | Skip member |
@@ -121,7 +121,7 @@ Do **not** mark `Result` / `Result<T>` as DataContract. HTTP endpoints typically
 ## MSBuild properties
 
 | Property | Default | Meaning |
-|----------|---------|---------|
+| ---------- | --------- | --------- |
 | `MinimalJsonSerializerEnabled` | `true` | Master switch |
 | `MinimalJsonEmitArrays` | `true` | Emit `T[]` roots |
 | `MinimalJsonEmitList` | `true` | Emit `List<T>` roots |
@@ -131,13 +131,35 @@ Do **not** mark `Result` / `Result<T>` as DataContract. HTTP endpoints typically
 
 ## Performance
 
-Benchmarks compare:
+The package does **not** invent a new serializer. It discovers your DataContract graph and emits the same `[JsonSerializable]` roots you would have written by hand, then the **built-in System.Text.Json source generator** builds the serializers.
 
-1. Reflection (`DefaultJsonTypeInfoResolver`)
-2. Manual complete STJ context
-3. Minimal-generated STJ context
+So the fair comparison is three paths on the same payload:
 
-**Minimal ≈ Manual** at runtime (same STJ-generated serializers). Both beat reflection on throughput and allocations. The win is **authoring/maintenance**, not a new serializer engine.
+| Path | What it is |
+| ------ | ------------ |
+| **Reflection** | Stock STJ with `DefaultJsonTypeInfoResolver` — no `JsonSerializerContext`, no hand-written roots |
+| **Manual STJ** | Complete hand-maintained `[JsonSerializable(typeof(...))]` context (the maintenance pain) |
+| **MinimalSerializers** | Same STJ source-gen path as manual, but roots are discovered automatically |
+
+### Results
+
+Representative numbers from `benchmarks/MinimalSerializers.Json.Benchmarks` on .NET 11 / Apple M4 Max (InProcess, warmed options):
+
+| Method | Mean | Allocated | vs reflection serialize |
+| -------- | -----: | ----------: | ------------------------: |
+| **Reflection_Serialize** (baseline) | 1,241 ns | 760 B | 1.00× |
+| ManualStj_Serialize | 798 ns | 449 B | **0.64×** |
+| MinimalStj_Serialize | 783 ns | 449 B | **0.63×** |
+| Reflection_Deserialize | 2,002 ns | 1,137 B | 1.61× |
+| ManualStj_Deserialize | 2,766 ns | 1,593 B | 2.23× |
+| MinimalStj_Deserialize | 2,767 ns | 1,593 B | 2.23× |
+
+### Takeaways
+
+1. **Minimal ≈ Manual** on both serialize and deserialize (within noise). That is the point: you get the **source-generated STJ path** without typing every root and every `T[]` / `List<T>` by hand.
+2. **Serialize is clearly faster and leaner than reflection** (~1.6× throughput, ~40% less allocation) for both manual and Minimal contexts.
+3. **Deserialize allocations track the generated contract metadata**, so STJ source-gen is not always a free lunch vs reflection on tiny graphs — but Manual and Minimal stay locked together. If you already accept manual STJ for AOT/trimming/ASP.NET root coverage, Minimal does not cost extra at runtime.
+4. The product win is **authoring and maintenance**: one `[MinimalJsonSerializerContext]` partial instead of a brittle, ever-growing attribute list — **at the same speed as the hand-written context**.
 
 ```bash
 dotnet run --project benchmarks/MinimalSerializers.Json.Benchmarks -c Release
@@ -162,7 +184,7 @@ dotnet run --project samples/Sample.Host
 ## Diagnostics
 
 | Code | Meaning |
-|------|---------|
+| ------ | --------- |
 | MSJ0001 | No Minimal context / attribute missing |
 | MSJ0002 | Context found but no DataContracts |
 | MSJ0003 | Context not partial or not a JsonSerializerContext |

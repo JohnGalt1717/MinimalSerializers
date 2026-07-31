@@ -1,0 +1,4 @@
+**/*.targets
+**/*.props
+**/obj/**
+**/bin/**

@@ -6,7 +6,7 @@
   <PropertyGroup Label="SharedVersions">
     <MicrosoftCodeAnalysisVersion>4.14.0</MicrosoftCodeAnalysisVersion>
     <XunitVersion>2.9.3</XunitVersion>
-    <BenchmarkDotNetVersion>0.15.2</BenchmarkDotNetVersion>
+    <BenchmarkDotNetVersion>0.15.8</BenchmarkDotNetVersion>
     <CoverletVersion>6.0.4</CoverletVersion>
     <VerifyVersion>30.4.0</VerifyVersion>
   </PropertyGroup>
