@@ -20,6 +20,7 @@ jobs:
       - run: dotnet build MinimalSerializers.slnx -c Release --no-restore
       - run: dotnet test tests/MinimalSerializers.Json.Tests/MinimalSerializers.Json.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --settings coverage.runsettings
       - run: dotnet test tests/MinimalSerializers.Json.Package.Tests/MinimalSerializers.Json.Package.Tests.csproj -c Release --no-build
+      # Pack after solution build so task assets under Tasks/bin/Release/net8.0 already exist.
       - run: dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj -c Release -o artifacts/packages --no-build
       - uses: actions/upload-artifact@v4
         with:

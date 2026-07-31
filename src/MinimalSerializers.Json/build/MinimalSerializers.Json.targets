@@ -33,7 +33,8 @@
   <UsingTask TaskName="MinimalSerializers.Json.Tasks.GenerateMinimalJsonSerializerContexts" AssemblyFile="$(MinimalJson_TaskAssembly)" Condition="'$(MinimalJson_TaskAssembly)' != ''" />
 
   <Target Name="MinimalJson_EnsureTasksBuilt" BeforeTargets="MinimalJson_GenerateContexts" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
-    <MSBuild Projects="$(_MinimalJson_TasksProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0" Condition="Exists('$(_MinimalJson_TasksProject)') and !Exists('$(MinimalJson_TaskAssembly)')" />
+    <!-- Nested Build is invalid under pack/test NoBuild (NETSDK1085). Only build when missing and allowed. -->
+    <MSBuild Projects="$(_MinimalJson_TasksProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0;NoBuild=false" Condition="Exists('$(_MinimalJson_TasksProject)') and !Exists('$(MinimalJson_TaskAssembly)') and '$(NoBuild)' != 'true'" />
     <PropertyGroup>
       <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_PackagedTaskAssembly)')">$(_MinimalJson_PackagedTaskAssembly)</MinimalJson_TaskAssembly>
       <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_RepoTaskCandidate)')">$(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>

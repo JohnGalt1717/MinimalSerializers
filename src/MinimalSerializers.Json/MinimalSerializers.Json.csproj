@@ -22,7 +22,16 @@
   </ItemGroup>
 
   <Target Name="MinimalJson_IncludeTaskAssets" BeforeTargets="_GetPackageFiles" Condition="'$(IsPackable)' == 'true'">
-    <MSBuild Projects="$(BuildTaskProject)" Targets="Restore;Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0" />
+    <!-- Build task assets only when missing. Nested Build under pack NoBuild hits NETSDK1085. -->
+    <MSBuild
+      Projects="$(BuildTaskProject)"
+      Targets="Restore;Build"
+      Properties="Configuration=$(Configuration);TargetFramework=net8.0;NoBuild=false;BuildProjectReferences=true"
+      Condition="!Exists('$(BuildTaskOutputDir)MinimalSerializers.Json.Tasks.dll') and '$(NoBuild)' != 'true'" />
+    <Error
+      Code="MSJ0008"
+      Text="MinimalSerializers.Json task assets were not found under '$(BuildTaskOutputDir)'. Build MinimalSerializers.Json.Tasks (net8.0) before packing, or pack without NoBuild."
+      Condition="!Exists('$(BuildTaskOutputDir)MinimalSerializers.Json.Tasks.dll')" />
     <ItemGroup>
       <_PackageFiles Include="$(BuildTaskOutputDir)MinimalSerializers.Json.Tasks.dll">
         <PackagePath>tasks/net8.0/</PackagePath>
@@ -51,3 +60,4 @@
     </ItemGroup>
   </Target>
 </Project>
+
