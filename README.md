@@ -210,6 +210,82 @@ dotnet test MinimalSerializers.slnx --settings coverage.runsettings
 dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj -c Release -o artifacts/packages
 ```
 
+## Publishing to NuGet
+
+Package id: **`MinimalSerializers.Json`**  
+Version source: git tag `v*` (for example `v1.0.0` → package version `1.0.0`).  
+Default `VersionPrefix` in `Directory.Build.props` is `1.0.0`.
+
+### One-time setup
+
+1. Create a NuGet.org API key:
+   - https://www.nuget.org/account/apikeys
+   - **Push new packages and package versions**
+   - Glob: `MinimalSerializers.Json` (or `*`)
+2. Store it as a GitHub Actions secret on this repo:
+
+```bash
+gh secret set NUGET_API_KEY -R JohnGalt1717/MinimalSerializers
+# paste the key when prompted
+```
+
+3. Confirm CI is green on `main` before tagging.
+
+### Recommended: tag-triggered release
+
+Pushing a version tag runs `.github/workflows/release.yml`, which builds, tests, packs, pushes to nuget.org, and creates a GitHub Release:
+
+```bash
+# from a clean main with latest pull
+git checkout main
+git pull
+
+# optional: update RELEASE_NOTES.md first and commit
+
+git tag v1.0.0
+git push origin v1.0.0
+
+# watch the release workflow
+gh run watch --repo JohnGalt1717/MinimalSerializers
+```
+
+After it finishes:
+
+```bash
+# package page
+open "https://www.nuget.org/packages/MinimalSerializers.Json/1.0.0"
+
+# or verify the feed
+curl -s https://api.nuget.org/v3-flatcontainer/minimalserializers.json/index.json
+```
+
+### Manual local publish
+
+Use this only if you need to push outside Actions (still requires a NuGet API key in your environment):
+
+```bash
+export NUGET_API_KEY=...   # do not commit this
+
+dotnet restore MinimalSerializers.slnx
+dotnet build MinimalSerializers.slnx -c Release -p:Version=1.0.0
+dotnet test MinimalSerializers.slnx -c Release --no-build
+dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj \
+  -c Release -o artifacts/packages -p:Version=1.0.0
+
+# push package + symbols (snupkg is included next to the nupkg)
+dotnet nuget push artifacts/packages/*.nupkg \
+  --api-key "$NUGET_API_KEY" \
+  --source https://api.nuget.org/v3/index.json \
+  --skip-duplicate
+```
+
+### Notes
+
+- Prefer the **tag workflow**; it keeps version, GitHub Release, and nuget.org in sync.
+- `--skip-duplicate` makes re-runs safe if the version is already on nuget.org.
+- Symbols ship as `.snupkg` beside the package (`SymbolPackageFormat=snupkg`).
+- Do **not** commit API keys. Rotate any key that was pasted into a shell history you share.
+
 ## License
 
 MIT
