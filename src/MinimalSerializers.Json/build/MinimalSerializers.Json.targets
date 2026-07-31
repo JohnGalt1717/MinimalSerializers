@@ -1,32 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
+  <!--
+    IMPORTANT:
+    - Keep property values on ONE line. Leading/trailing whitespace becomes part of the path.
+    - Do not gate UsingTask on Exists(...). MSBuild evaluates UsingTask at load time; on a clean CI
+      build the task DLL may not exist yet. EnsureTasksBuilt produces it before the task runs, and
+      AssemblyFile is resolved when the task is invoked.
+  -->
   <PropertyGroup>
-    <!-- IMPORTANT: Keep property values on one line. Leading/trailing whitespace becomes part of the path. -->
-    <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)../tasks/net8.0/MinimalSerializers.Json.Tasks.dll')">$(MSBuildThisFileDirectory)../tasks/net8.0/MinimalSerializers.Json.Tasks.dll</MinimalJson_TaskAssembly>
+    <!-- Packaged layout: build[Transitive]/../tasks/net8.0/... -->
+    <_MinimalJson_PackagedTaskAssembly>$(MSBuildThisFileDirectory)../tasks/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_PackagedTaskAssembly>
+    <!-- Repo ProjectReference layout -->
     <_MinimalJson_RepoTaskCandidate>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/$(Configuration)/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate>
     <_MinimalJson_RepoTaskCandidate2>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/Debug/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate2>
+    <_MinimalJson_TasksProject>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/MinimalSerializers.Json.Tasks.csproj</_MinimalJson_TasksProject>
+
+    <!-- Prefer packaged task when present; otherwise use repo output path (may not exist yet). -->
+    <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_PackagedTaskAssembly)')">$(_MinimalJson_PackagedTaskAssembly)</MinimalJson_TaskAssembly>
     <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_RepoTaskCandidate)')">$(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>
     <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_RepoTaskCandidate2)')">$(_MinimalJson_RepoTaskCandidate2)</MinimalJson_TaskAssembly>
+    <!-- Clean CI: set expected repo path even if the DLL is not built yet. -->
+    <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_TasksProject)')">$(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>
+    <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == ''">$(_MinimalJson_PackagedTaskAssembly)</MinimalJson_TaskAssembly>
+
     <_MinimalJson_BaseOut Condition="'$(IntermediateOutputPath)' != ''">$(IntermediateOutputPath)</_MinimalJson_BaseOut>
     <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">$(BaseIntermediateOutputPath)$(Configuration)/$(TargetFramework)/</_MinimalJson_BaseOut>
     <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">obj/$(Configuration)/</_MinimalJson_BaseOut>
     <MinimalJson_GeneratedDir>$(_MinimalJson_BaseOut)minimaljson/</MinimalJson_GeneratedDir>
   </PropertyGroup>
 
-  <UsingTask TaskName="MinimalSerializers.Json.Tasks.GenerateMinimalJsonSerializerContexts" AssemblyFile="$(MinimalJson_TaskAssembly)" Condition="'$(MinimalJson_TaskAssembly)' != '' and Exists('$(MinimalJson_TaskAssembly)')" />
+  <!-- Always register; assembly is loaded at task invocation after EnsureTasksBuilt. -->
+  <UsingTask TaskName="MinimalSerializers.Json.Tasks.GenerateMinimalJsonSerializerContexts" AssemblyFile="$(MinimalJson_TaskAssembly)" Condition="'$(MinimalJson_TaskAssembly)' != ''" />
 
   <Target Name="MinimalJson_EnsureTasksBuilt" BeforeTargets="MinimalJson_GenerateContexts" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
+    <MSBuild Projects="$(_MinimalJson_TasksProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0" Condition="Exists('$(_MinimalJson_TasksProject)') and !Exists('$(MinimalJson_TaskAssembly)')" />
     <PropertyGroup>
-      <_MinimalJson_TasksProject>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/MinimalSerializers.Json.Tasks.csproj</_MinimalJson_TasksProject>
-    </PropertyGroup>
-    <MSBuild Projects="$(_MinimalJson_TasksProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0" Condition="Exists('$(_MinimalJson_TasksProject)') and ('$(MinimalJson_TaskAssembly)' == '' or !Exists('$(MinimalJson_TaskAssembly)'))" />
-    <PropertyGroup>
+      <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_PackagedTaskAssembly)')">$(_MinimalJson_PackagedTaskAssembly)</MinimalJson_TaskAssembly>
       <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_RepoTaskCandidate)')">$(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>
-      <MinimalJson_TaskAssembly Condition="('$(MinimalJson_TaskAssembly)' == '' or !Exists('$(MinimalJson_TaskAssembly)')) and Exists('$(_MinimalJson_RepoTaskCandidate2)')">$(_MinimalJson_RepoTaskCandidate2)</MinimalJson_TaskAssembly>
+      <MinimalJson_TaskAssembly Condition="(!Exists('$(MinimalJson_TaskAssembly)') or '$(MinimalJson_TaskAssembly)' == '') and Exists('$(_MinimalJson_RepoTaskCandidate2)')">$(_MinimalJson_RepoTaskCandidate2)</MinimalJson_TaskAssembly>
     </PropertyGroup>
+    <Error Text="MinimalSerializers.Json task assembly was not found at '$(MinimalJson_TaskAssembly)'. Build MinimalSerializers.Json.Tasks or restore the NuGet package." Condition="!Exists('$(MinimalJson_TaskAssembly)')" Code="MSJ0007" />
   </Target>
 
-  <Target Name="MinimalJson_GenerateContexts" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt" Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != '' and Exists('$(MinimalJson_TaskAssembly)')" Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath)" Outputs="$(MinimalJson_GeneratedDir)stamp.minimaljson">
+  <Target Name="MinimalJson_GenerateContexts" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt" Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''" Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath)" Outputs="$(MinimalJson_GeneratedDir)stamp.minimaljson">
     <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
     <!-- If a previous run left a stamp without generated sources, force regeneration. -->
     <ItemGroup>
@@ -59,4 +75,3 @@
     </ItemGroup>
   </Target>
 </Project>
-
