@@ -213,78 +213,94 @@ dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj -c Releas
 ## Publishing to NuGet
 
 Package id: **`MinimalSerializers.Json`**  
-Version source: git tag `v*` (for example `v1.0.0` → package version `1.0.0`).  
+Version source: `PACKAGE_VERSION` in `.env`, else current/latest git tag `v*`, else `1.0.0`.  
 Default `VersionPrefix` in `Directory.Build.props` is `1.0.0`.
 
-### One-time setup
+Local publish reads secrets from **`.env`** (gitignored). Tracked template: **`.env.example`**.
 
-1. Create a NuGet.org API key:
-   - https://www.nuget.org/account/apikeys
-   - **Push new packages and package versions**
-   - Glob: `MinimalSerializers.Json` (or `*`)
-2. Store it as a GitHub Actions secret on this repo:
+### 1) Create a NuGet.org API key
+
+1. Sign in at [nuget.org](https://www.nuget.org/) (Microsoft account).
+2. Open **Account settings → API Keys**:  
+   https://www.nuget.org/account/apikeys
+3. Click **Create**.
+4. Recommended fields:
+   - **Key name:** `MinimalSerializers local` (or `GitHub Actions`)
+   - **Expires:** your choice (90 days is fine; create a long-lived one only if you must)
+   - **Select Scopes:** **Push** → **Push new packages and package versions**
+   - **Select Packages:** **Glob pattern** → `MinimalSerializers.Json`
+   - Leave select organizations empty unless the package should own under an org
+5. Create the key and **copy it immediately** (NuGet shows it once).
+
+### 2) Put the key in `.env`
 
 ```bash
-gh secret set NUGET_API_KEY -R JohnGalt1717/MinimalSerializers
-# paste the key when prompted
+cp .env.example .env
 ```
 
-3. Confirm CI is green on `main` before tagging.
-
-### Recommended: tag-triggered release
-
-Pushing a version tag runs `.github/workflows/release.yml`, which builds, tests, packs, pushes to nuget.org, and creates a GitHub Release:
+Edit `.env` and set:
 
 ```bash
-# from a clean main with latest pull
-git checkout main
-git pull
+NUGET_API_KEY=oy2...your_real_key...
+```
 
-# optional: update RELEASE_NOTES.md first and commit
+Optional:
+
+```bash
+PACKAGE_VERSION=1.0.0
+NUGET_SOURCE=https://api.nuget.org/v3/index.json
+CONFIGURATION=Release
+```
+
+`.env` is gitignored. Never commit it.
+
+### 3) Publish locally (uses `.env`)
+
+```bash
+# pack + test + push using scripts/publish-nuget.sh
+./scripts/publish-nuget.sh
+
+# pack only (no push)
+PUSH=false ./scripts/publish-nuget.sh
+
+# override version for this run
+PACKAGE_VERSION=1.0.0 ./scripts/publish-nuget.sh
+```
+
+The script:
+
+1. loads `NUGET_API_KEY` from `.env`
+2. restores / builds Release
+3. runs unit + package tests
+4. packs `MinimalSerializers.Json` to `artifacts/packages/`
+5. runs `dotnet nuget push` to nuget.org (`--skip-duplicate`)
+
+### 4) Optional: also enable GitHub tag releases
+
+For `.github/workflows/release.yml` (push tag `v1.0.0`):
+
+```bash
+# upload the same key as a repo secret (reads from .env without printing it)
+set -a && source .env && set +a
+printf '%s' "$NUGET_API_KEY" | gh secret set NUGET_API_KEY -R JohnGalt1717/MinimalSerializers
 
 git tag v1.0.0
 git push origin v1.0.0
-
-# watch the release workflow
 gh run watch --repo JohnGalt1717/MinimalSerializers
 ```
 
-After it finishes:
+### Verify publish
 
 ```bash
-# package page
-open "https://www.nuget.org/packages/MinimalSerializers.Json/1.0.0"
-
-# or verify the feed
+open "https://www.nuget.org/packages/MinimalSerializers.Json/"
 curl -s https://api.nuget.org/v3-flatcontainer/minimalserializers.json/index.json
-```
-
-### Manual local publish
-
-Use this only if you need to push outside Actions (still requires a NuGet API key in your environment):
-
-```bash
-export NUGET_API_KEY=...   # do not commit this
-
-dotnet restore MinimalSerializers.slnx
-dotnet build MinimalSerializers.slnx -c Release -p:Version=1.0.0
-dotnet test MinimalSerializers.slnx -c Release --no-build
-dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj \
-  -c Release -o artifacts/packages -p:Version=1.0.0
-
-# push package + symbols (snupkg is included next to the nupkg)
-dotnet nuget push artifacts/packages/*.nupkg \
-  --api-key "$NUGET_API_KEY" \
-  --source https://api.nuget.org/v3/index.json \
-  --skip-duplicate
 ```
 
 ### Notes
 
-- Prefer the **tag workflow**; it keeps version, GitHub Release, and nuget.org in sync.
-- `--skip-duplicate` makes re-runs safe if the version is already on nuget.org.
-- Symbols ship as `.snupkg` beside the package (`SymbolPackageFormat=snupkg`).
-- Do **not** commit API keys. Rotate any key that was pasted into a shell history you share.
+- `--skip-duplicate` makes re-runs safe if that version already exists.
+- Symbols ship as `.snupkg` next to the `.nupkg`.
+- Rotate any key that may have been exposed in shell history or logs.
 
 ## License
 
