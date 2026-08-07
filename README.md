@@ -102,6 +102,18 @@ For each discovered object/enum type `T` (from `[DataContract]` and nested `[Dat
 
 Also registers closed collection/dictionary shapes found on members when enabled.
 
+### TypeInfo property names
+
+Collection and array roots are emitted with an explicit `TypeInfoPropertyName` so they cannot collide with DTOs named `List*Dto` (STJ **SYSLIB1031**):
+
+```csharp
+[JsonSerializable(typeof(ListMoneyDetailsDto))]
+[JsonSerializable(typeof(ListMoneyDetailsDto[]), TypeInfoPropertyName = "ArrayOf_ListMoneyDetailsDto")]
+[JsonSerializable(typeof(List<MoneyDetailsDto>), TypeInfoPropertyName = "ListOf_MoneyDetailsDto")]
+```
+
+Plain object/enum roots keep STJ's default short names unless two types would still share the same short name (different namespaces), in which case Minimal assigns unique names. Prefer `options.GetTypeInfo(typeof(T))` / `JsonSerializer.Serialize(value, options)` when you do not want to depend on generated property names; typed `Context.Default.ListOf_…` members follow the mangled names above.
+
 ### Conventions
 
 | Mark | Role |
@@ -123,6 +135,7 @@ Also registers closed collection/dictionary shapes found on members when enabled
 | `MinimalJsonEmitList` | `true` | Emit `List<T>` roots |
 | `MinimalJsonEmitDeclaredCollections` | `true` | Emit declared collection interface closed types |
 | `MinimalJsonEmitDictionaries` | `true` | Emit dictionary closed types |
+| `MinimalJsonWarnOpenGenerics` | `summary` | MSJ0004 mode: `summary` (one warning), `all` (per type), or `none` |
 | `MinimalJson_EnableDesignTime` | `true` | Generate during design-time builds |
 
 ## Performance
@@ -182,6 +195,7 @@ dotnet run --project samples/Sample.Host
 ## Limitations (v1)
 
 - Open generics are skipped as roots (closed constructed types only)
+- **Generic DTO inheritance** of the form `Derived<T> : Base<T>` (both DataContracts) can break the built-in STJ source generator with **CS0102** (duplicate nested accessor types). MinimalSerializers emits **MSJ0009** when it detects this shape. Prefer composition or flattened records. Closed constructions are still registered.
 - Polymorphism / `$type` discriminators are not auto-generated (keep your own `JsonTypeInfo` modifiers)
 - `DataMember.Name` is not rewritten to `[JsonPropertyName]` (STJ naming policies remain source of truth)
 - Multi-assembly discovery is not enabled by default (one project → one context)
@@ -193,9 +207,10 @@ dotnet run --project samples/Sample.Host
 | MSJ0001 | No Minimal context / attribute missing |
 | MSJ0002 | Context found but no DataContracts |
 | MSJ0003 | Context not partial or not a JsonSerializerContext |
-| MSJ0004 | Open generic skipped |
+| MSJ0004 | Open generic skipped (`summary` / `all` / `none` via `MinimalJsonWarnOpenGenerics`) |
 | MSJ0005 | Unresolvable member type skipped |
 | MSJ0006 | Generation failure |
+| MSJ0009 | Generic DataContract inheritance `Derived<T> : Base<T>` may break STJ source-gen (CS0102) |
 
 ## Development
 

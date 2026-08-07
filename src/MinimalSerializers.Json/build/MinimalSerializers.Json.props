@@ -5,6 +5,7 @@
     <MinimalJsonEmitList Condition="'$(MinimalJsonEmitList)' == ''">true</MinimalJsonEmitList>
     <MinimalJsonEmitDeclaredCollections Condition="'$(MinimalJsonEmitDeclaredCollections)' == ''">true</MinimalJsonEmitDeclaredCollections>
     <MinimalJsonEmitDictionaries Condition="'$(MinimalJsonEmitDictionaries)' == ''">true</MinimalJsonEmitDictionaries>
+    <MinimalJsonWarnOpenGenerics Condition="'$(MinimalJsonWarnOpenGenerics)' == ''">summary</MinimalJsonWarnOpenGenerics>
     <MinimalJson_EnableDesignTime Condition="'$(MinimalJson_EnableDesignTime)' == ''">true</MinimalJson_EnableDesignTime>
     <DefaultItemExcludes>$(DefaultItemExcludes);**/minimaljson/**;**/*.MinimalJson.g.cs</DefaultItemExcludes>
   </PropertyGroup>

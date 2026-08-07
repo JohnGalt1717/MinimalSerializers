@@ -55,7 +55,7 @@ public static class JsonSerializableRootCollector
             return new DiscoveryResult(contexts.ToImmutable(), diagnostics.ToImmutable());
         }
 
-        var rootNames = CollectRootDisplayNames(
+        var roots = CollectRoots(
             compilation,
             options,
             dataContractAttr,
@@ -65,7 +65,7 @@ public static class JsonSerializableRootCollector
             diagnostics
         );
 
-        if (rootNames.Length == 0)
+        if (roots.Length == 0)
         {
             diagnostics.Add(
                 new DiscoveryDiagnostic(
@@ -126,7 +126,7 @@ public static class JsonSerializableRootCollector
                     accessibility,
                     isPartial,
                     derives,
-                    rootNames,
+                    roots,
                     ctxDiagnostics.ToImmutable()
                 )
             );
@@ -194,7 +194,7 @@ public static class JsonSerializableRootCollector
         return false;
     }
 
-    private static ImmutableArray<string> CollectRootDisplayNames(
+    private static ImmutableArray<DiscoveredRoot> CollectRoots(
         Compilation compilation,
         DiscoveryOptions options,
         INamedTypeSymbol? dataContractAttr,
@@ -204,9 +204,14 @@ public static class JsonSerializableRootCollector
         ImmutableArray<DiscoveryDiagnostic>.Builder diagnostics
     )
     {
-        var roots = new SortedSet<string>(StringComparer.Ordinal);
+        // Keyed by typeof display string so we keep a single entry per closed type.
+        var rootsByDisplay = new SortedDictionary<string, DiscoveredRoot>(StringComparer.Ordinal);
         var visited = new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
         var queue = new Queue<ITypeSymbol>();
+        var openGenericSkips = new List<string>();
+        var genericInheritanceWarned = new HashSet<INamedTypeSymbol>(
+            SymbolEqualityComparer.Default
+        );
 
         foreach (var type in GetAllNamedTypes(compilation.Assembly.GlobalNamespace))
         {
@@ -225,36 +230,23 @@ public static class JsonSerializableRootCollector
                 continue;
             }
 
-            if (type.IsGenericType && type.IsUnboundGenericType)
+            if (IsOpenGeneric(type))
             {
-                diagnostics.Add(
-                    new DiscoveryDiagnostic(
-                        "MSJ0004",
-                        DiscoveryDiagnosticSeverity.Warning,
-                        $"Open generic DataContract type '{type.ToDisplayString()}' was skipped."
-                    )
-                );
-                continue;
-            }
-
-            if (
-                type.IsGenericType
-                && type.TypeParameters.Length > 0
-                && type.TypeArguments.Any(a => a is ITypeParameterSymbol)
-            )
-            {
-                diagnostics.Add(
-                    new DiscoveryDiagnostic(
-                        "MSJ0004",
-                        DiscoveryDiagnosticSeverity.Warning,
-                        $"Open generic DataContract type '{type.ToDisplayString()}' was skipped."
-                    )
+                openGenericSkips.Add(type.ToDisplayString());
+                // Surface the STJ CS0102 footgun on the open definition as well as closed uses.
+                DiagnoseGenericDtoInheritance(
+                    type,
+                    dataContractAttr,
+                    diagnostics,
+                    genericInheritanceWarned
                 );
                 continue;
             }
 
             Enqueue(type);
         }
+
+        EmitOpenGenericDiagnostics(options, openGenericSkips, diagnostics);
 
         while (queue.Count > 0)
         {
@@ -287,14 +279,14 @@ public static class JsonSerializableRootCollector
             switch (current)
             {
                 case IArrayTypeSymbol array:
-                    AddRoot(roots, TypeDisplayNameFormatter.ToGlobalDisplayString(array));
+                    AddArrayRoot(rootsByDisplay, array, mangle: !IsPrimitiveLike(array.ElementType));
                     Enqueue(array.ElementType);
                     continue;
                 case INamedTypeSymbol named
                     when IsSupportedDictionary(named, out var key, out var value):
                     if (options.IncludeDictionaries)
                     {
-                        AddRoot(roots, TypeDisplayNameFormatter.ToGlobalDisplayString(named));
+                        AddCollectionLikeRoot(rootsByDisplay, named, "DictionaryOf");
                     }
                     Enqueue(key);
                     Enqueue(value);
@@ -302,14 +294,40 @@ public static class JsonSerializableRootCollector
                 case INamedTypeSymbol named when IsSupportedCollection(named, out var element):
                     if (options.IncludeDeclaredCollectionInterfaces)
                     {
-                        AddRoot(roots, TypeDisplayNameFormatter.ToGlobalDisplayString(named));
+                        if (
+                            named.OriginalDefinition.ToDisplayString()
+                            == "System.Collections.Generic.List<T>"
+                        )
+                        {
+                            AddRoot(
+                                rootsByDisplay,
+                                new DiscoveredRoot(
+                                    TypeDisplayNameFormatter.ToGlobalDisplayString(named),
+                                    TypeDisplayNameFormatter.ToTypeInfoPropertyName(
+                                        "ListOf",
+                                        element
+                                    )
+                                )
+                            );
+                        }
+                        else
+                        {
+                            AddCollectionLikeRoot(rootsByDisplay, named, "CollectionOf");
+                        }
                     }
                     Enqueue(element);
                     continue;
                 case INamedTypeSymbol named:
                     if (named.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Enum)
                     {
-                        RegisterObjectOrEnum(named, options, roots);
+                        RegisterObjectOrEnum(
+                            named,
+                            options,
+                            rootsByDisplay,
+                            dataContractAttr,
+                            diagnostics,
+                            genericInheritanceWarned
+                        );
                         if (named.TypeKind != TypeKind.Enum)
                         {
                             WalkMembers(
@@ -326,7 +344,9 @@ public static class JsonSerializableRootCollector
             }
         }
 
-        return roots.ToImmutableArray();
+        ResolveShortNameCollisions(rootsByDisplay);
+
+        return rootsByDisplay.Values.ToImmutableArray();
 
         void Enqueue(ITypeSymbol? type)
         {
@@ -339,10 +359,84 @@ public static class JsonSerializableRootCollector
         }
     }
 
+    private static void EmitOpenGenericDiagnostics(
+        DiscoveryOptions options,
+        List<string> openGenericSkips,
+        ImmutableArray<DiscoveryDiagnostic>.Builder diagnostics
+    )
+    {
+        if (openGenericSkips.Count == 0)
+        {
+            return;
+        }
+
+        openGenericSkips.Sort(StringComparer.Ordinal);
+
+        switch (options.OpenGenericWarningMode)
+        {
+            case OpenGenericWarningMode.None:
+                return;
+            case OpenGenericWarningMode.All:
+                foreach (var name in openGenericSkips)
+                {
+                    diagnostics.Add(
+                        new DiscoveryDiagnostic(
+                            "MSJ0004",
+                            DiscoveryDiagnosticSeverity.Warning,
+                            $"Open generic DataContract type '{name}' was skipped."
+                        )
+                    );
+                }
+                return;
+            default:
+                // Summary (default)
+                if (openGenericSkips.Count == 1)
+                {
+                    diagnostics.Add(
+                        new DiscoveryDiagnostic(
+                            "MSJ0004",
+                            DiscoveryDiagnosticSeverity.Warning,
+                            $"Skipped 1 open generic DataContract type: '{openGenericSkips[0]}'. Set MinimalJsonWarnOpenGenerics=all for per-type details."
+                        )
+                    );
+                }
+                else
+                {
+                    diagnostics.Add(
+                        new DiscoveryDiagnostic(
+                            "MSJ0004",
+                            DiscoveryDiagnosticSeverity.Warning,
+                            $"Skipped {openGenericSkips.Count} open generic DataContract types. Set MinimalJsonWarnOpenGenerics=all for per-type details, or none to silence."
+                        )
+                    );
+                }
+                return;
+        }
+    }
+
+    private static bool IsOpenGeneric(INamedTypeSymbol type)
+    {
+        if (!type.IsGenericType)
+        {
+            return false;
+        }
+
+        if (type.IsUnboundGenericType)
+        {
+            return true;
+        }
+
+        return type.TypeParameters.Length > 0
+            && type.TypeArguments.Any(a => a is ITypeParameterSymbol);
+    }
+
     private static void RegisterObjectOrEnum(
         INamedTypeSymbol type,
         DiscoveryOptions options,
-        SortedSet<string> roots
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
+        INamedTypeSymbol? dataContractAttr,
+        ImmutableArray<DiscoveryDiagnostic>.Builder diagnostics,
+        HashSet<INamedTypeSymbol> genericInheritanceWarned
     )
     {
         // Primitives/BCL scalars are handled by STJ without explicit roots.
@@ -351,15 +445,351 @@ public static class JsonSerializableRootCollector
             return;
         }
 
-        AddRoot(roots, TypeDisplayNameFormatter.ToGlobalDisplayString(type));
+        DiagnoseGenericDtoInheritance(
+            type,
+            dataContractAttr,
+            diagnostics,
+            genericInheritanceWarned
+        );
+
+        // Plain object/enum roots keep STJ default names unless a later collision forces a rename.
+        AddRoot(
+            rootsByDisplay,
+            new DiscoveredRoot(TypeDisplayNameFormatter.ToGlobalDisplayString(type))
+        );
+
         if (options.IncludeArrays)
         {
-            AddRoot(roots, TypeDisplayNameFormatter.ToArrayDisplayString(type));
+            AddArrayRootForElement(rootsByDisplay, type);
         }
 
         if (options.IncludeList)
         {
-            AddRoot(roots, TypeDisplayNameFormatter.ToListDisplayString(type));
+            var listDisplay = TypeDisplayNameFormatter.ToListDisplayString(type);
+            AddRoot(
+                rootsByDisplay,
+                new DiscoveredRoot(
+                    listDisplay,
+                    TypeDisplayNameFormatter.ToTypeInfoPropertyName("ListOf", type)
+                )
+            );
+        }
+    }
+
+    /// <summary>
+    /// STJ source-gen can emit duplicate nested accessor classes (CS0102) for closed forms of
+    /// <c>Derived&lt;T&gt; : Base&lt;T&gt;</c> DataContract graphs. Detect and warn clearly.
+    /// </summary>
+    private static void DiagnoseGenericDtoInheritance(
+        INamedTypeSymbol type,
+        INamedTypeSymbol? dataContractAttr,
+        ImmutableArray<DiscoveryDiagnostic>.Builder diagnostics,
+        HashSet<INamedTypeSymbol> genericInheritanceWarned
+    )
+    {
+        if (!type.IsGenericType || type.TypeArguments.Length == 0)
+        {
+            return;
+        }
+
+        if (
+            type.BaseType is not { SpecialType: not SpecialType.System_Object } baseType
+            || !baseType.IsGenericType
+        )
+        {
+            return;
+        }
+
+        if (
+            !HasNamedAttribute(
+                baseType.OriginalDefinition,
+                dataContractAttr,
+                "DataContractAttribute",
+                "DataContract"
+            )
+            && !HasNamedAttribute(
+                baseType,
+                dataContractAttr,
+                "DataContractAttribute",
+                "DataContract"
+            )
+        )
+        {
+            // Also accept when the open generic definition carries the attribute (common case).
+            var openBase = baseType.OriginalDefinition;
+            if (
+                !HasNamedAttribute(
+                    openBase,
+                    dataContractAttr,
+                    "DataContractAttribute",
+                    "DataContract"
+                )
+            )
+            {
+                // Still diagnose if both sides are DataContract-shaped via attribute name fallback
+                // on either the constructed or definition form — already covered above.
+            }
+        }
+
+        // Require the base to be a DataContract type (constructed or its open definition).
+        var baseIsDataContract =
+            HasNamedAttribute(baseType, dataContractAttr, "DataContractAttribute", "DataContract")
+            || HasNamedAttribute(
+                baseType.OriginalDefinition,
+                dataContractAttr,
+                "DataContractAttribute",
+                "DataContract"
+            );
+        if (!baseIsDataContract)
+        {
+            return;
+        }
+
+        // Same type-argument identity (Derived<T> : Base<T> / Derived<T,U> : Base<T,U> with matching args).
+        if (!SharesTypeArgumentsWithBase(type, baseType))
+        {
+            return;
+        }
+
+        // Dedupe on the open definition so open + closed constructions share one warning.
+        var key = type.OriginalDefinition;
+        if (!genericInheritanceWarned.Add(key))
+        {
+            return;
+        }
+
+        diagnostics.Add(
+            new DiscoveryDiagnostic(
+                "MSJ0009",
+                DiscoveryDiagnosticSeverity.Warning,
+                $"Generic DataContract inheritance '{type.ToDisplayString()} : {baseType.ToDisplayString()}' can break System.Text.Json source generation with CS0102 (duplicate nested accessor types). Prefer composition or flattened records without Derived<T> : Base<T>. Closed constructions of both types are still registered."
+            )
+        );
+    }
+
+    private static bool SharesTypeArgumentsWithBase(
+        INamedTypeSymbol derived,
+        INamedTypeSymbol baseType
+    )
+    {
+        // Match when every base type argument appears in the derived type argument list
+        // in the same order for the overlapping prefix (covers Derived<T> : Base<T> and
+        // Derived<T,U> : Base<T>).
+        if (baseType.TypeArguments.Length == 0 || derived.TypeArguments.Length == 0)
+        {
+            return false;
+        }
+
+        if (baseType.TypeArguments.Length > derived.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < baseType.TypeArguments.Length; i++)
+        {
+            if (
+                !SymbolEqualityComparer.Default.Equals(
+                    baseType.TypeArguments[i],
+                    derived.TypeArguments[i]
+                )
+            )
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddArrayRoot(
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
+        IArrayTypeSymbol array,
+        bool mangle
+    )
+    {
+        var display = TypeDisplayNameFormatter.ToGlobalDisplayString(array);
+        string? name = mangle
+            ? TypeDisplayNameFormatter.ToTypeInfoPropertyName("ArrayOf", array.ElementType)
+            : null;
+        AddRoot(rootsByDisplay, new DiscoveredRoot(display, name));
+    }
+
+    private static void AddArrayRootForElement(
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
+        ITypeSymbol elementType
+    )
+    {
+        var display = TypeDisplayNameFormatter.ToArrayDisplayString(elementType);
+        // Object/enum arrays always get a unique name; primitives (byte[], int[], ...) keep STJ defaults.
+        string? name = IsPrimitiveLike(elementType)
+            ? null
+            : TypeDisplayNameFormatter.ToTypeInfoPropertyName("ArrayOf", elementType);
+        AddRoot(rootsByDisplay, new DiscoveredRoot(display, name));
+    }
+
+    private static void AddCollectionLikeRoot(
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
+        INamedTypeSymbol named,
+        string prefix
+    )
+    {
+        var display = TypeDisplayNameFormatter.ToGlobalDisplayString(named);
+        // Always assign a mangled name for collection/dictionary closed shapes so they cannot
+        // collide with user DTOs named List* / Dictionary* / etc.
+        // Use the full closed type for uniqueness (includes element args).
+        var name = TypeDisplayNameFormatter.ToTypeInfoPropertyNameFromDisplay(prefix, display);
+        AddRoot(rootsByDisplay, new DiscoveredRoot(display, name));
+    }
+
+    private static void AddRoot(
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
+        DiscoveredRoot root
+    )
+    {
+        if (string.IsNullOrWhiteSpace(root.TypeDisplayName))
+        {
+            return;
+        }
+
+        // Prefer an entry that already has an explicit TypeInfoPropertyName.
+        // Prefer ListOf_* over CollectionOf_* for the same List<T> display.
+        if (rootsByDisplay.TryGetValue(root.TypeDisplayName, out var existing))
+        {
+            if (existing.TypeInfoPropertyName is null && root.TypeInfoPropertyName is not null)
+            {
+                rootsByDisplay[root.TypeDisplayName] = root;
+            }
+            else if (
+                existing.TypeInfoPropertyName is not null
+                && root.TypeInfoPropertyName is not null
+                && existing.TypeInfoPropertyName.StartsWith("CollectionOf_", StringComparison.Ordinal)
+                && root.TypeInfoPropertyName.StartsWith("ListOf_", StringComparison.Ordinal)
+            )
+            {
+                rootsByDisplay[root.TypeDisplayName] = root;
+            }
+
+            return;
+        }
+
+        rootsByDisplay[root.TypeDisplayName] = root;
+    }
+
+    /// <summary>
+    /// If two non-wrapper roots would still share the same STJ short name (same type name,
+    /// different namespaces), assign unique TypeInfoPropertyName values.
+    /// </summary>
+    private static void ResolveShortNameCollisions(
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay
+    )
+    {
+        // Approximate STJ short names for roots that still use the default.
+        var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var (display, root) in rootsByDisplay)
+        {
+            if (root.TypeInfoPropertyName is not null)
+            {
+                continue;
+            }
+
+            var shortName = ExtractDefaultShortName(display);
+            if (!groups.TryGetValue(shortName, out var list))
+            {
+                list = [];
+                groups[shortName] = list;
+            }
+
+            list.Add(display);
+        }
+
+        foreach (var (shortName, displays) in groups)
+        {
+            if (displays.Count < 2)
+            {
+                continue;
+            }
+
+            displays.Sort(StringComparer.Ordinal);
+            for (var i = 0; i < displays.Count; i++)
+            {
+                var display = displays[i];
+                var mangled =
+                    TypeDisplayNameFormatter.ToTypeInfoPropertyNameFromDisplay("Type", display)
+                    + (i == 0 ? string.Empty : $"_{i + 1}");
+                rootsByDisplay[display] = new DiscoveredRoot(display, mangled);
+            }
+        }
+
+        // Also ensure assigned property names are unique across all roots.
+        EnsureUniquePropertyNames(rootsByDisplay);
+    }
+
+    private static void EnsureUniquePropertyNames(
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay
+    )
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = rootsByDisplay.Keys.ToList();
+        foreach (var display in ordered)
+        {
+            var root = rootsByDisplay[display];
+            if (root.TypeInfoPropertyName is null)
+            {
+                // Reserve the default short name so later explicit names don't steal it.
+                used.Add(ExtractDefaultShortName(display));
+                continue;
+            }
+
+            var name = root.TypeInfoPropertyName;
+            if (used.Add(name))
+            {
+                continue;
+            }
+
+            var suffix = 2;
+            string candidate;
+            do
+            {
+                candidate = name + "_" + suffix;
+                suffix++;
+            } while (!used.Add(candidate));
+
+            rootsByDisplay[display] = new DiscoveredRoot(display, candidate);
+        }
+    }
+
+    private static string ExtractDefaultShortName(string globalDisplay)
+    {
+        var trimmed = globalDisplay;
+        if (trimmed.StartsWith("global::", StringComparison.Ordinal))
+        {
+            trimmed = trimmed["global::".Length..];
+        }
+
+        // Array: Foo.Bar[] → BarArray-ish via sanitize of last segment + Array
+        if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+        {
+            var element = trimmed[..^2];
+            var lastDot = element.LastIndexOf('.');
+            var simple = lastDot >= 0 ? element[(lastDot + 1)..] : element;
+            return TypeDisplayNameFormatter.SanitizeIdentifier(simple) + "Array";
+        }
+
+        // Generic: Namespace.List<Foo.Bar> → take type name before '<'
+        var generic = trimmed.IndexOf('<');
+        if (generic >= 0)
+        {
+            var head = trimmed[..generic];
+            var lastDot = head.LastIndexOf('.');
+            var simple = lastDot >= 0 ? head[(lastDot + 1)..] : head;
+            // STJ often names List<X> as ListX / ListOfX; sanitize full generic short form.
+            return TypeDisplayNameFormatter.SanitizeIdentifier(simple + trimmed[generic..]);
+        }
+
+        {
+            var lastDot = trimmed.LastIndexOf('.');
+            var simple = lastDot >= 0 ? trimmed[(lastDot + 1)..] : trimmed;
+            return TypeDisplayNameFormatter.SanitizeIdentifier(simple);
         }
     }
 
@@ -467,6 +897,19 @@ public static class JsonSerializableRootCollector
         {
             enqueue(baseType);
         }
+        else if (
+            type.BaseType is { SpecialType: not SpecialType.System_Object } baseType2
+            && HasNamedAttribute(
+                baseType2.OriginalDefinition,
+                dataContractAttr,
+                "DataContractAttribute",
+                "DataContract"
+            )
+        )
+        {
+            // Closed construction of a DataContract open generic base.
+            enqueue(baseType2);
+        }
     }
 
     private static bool IsSupportedCollection(INamedTypeSymbol named, out ITypeSymbol element)
@@ -570,14 +1013,6 @@ public static class JsonSerializableRootCollector
         }
 
         return false;
-    }
-
-    private static void AddRoot(SortedSet<string> roots, string displayName)
-    {
-        if (!string.IsNullOrWhiteSpace(displayName))
-        {
-            roots.Add(displayName);
-        }
     }
 
     private static ITypeSymbol UnwrapNullable(ITypeSymbol type)

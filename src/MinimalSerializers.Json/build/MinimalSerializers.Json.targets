@@ -46,7 +46,7 @@
       <_MinimalJson_References Include="@(ReferencePathWithRefAssemblies)" />
       <_MinimalJson_References Include="@(RuntimeCopyLocalItems)" Condition="'@(RuntimeCopyLocalItems)' != ''" />
     </ItemGroup>
-    <GenerateMinimalJsonSerializerContexts CompileFiles="@(Compile)" ReferencePaths="@(_MinimalJson_References)" OutputDirectory="$(MinimalJson_GeneratedDir)" LangVersion="$(LangVersion)" IncludeArrays="$(MinimalJsonEmitArrays)" IncludeList="$(MinimalJsonEmitList)" IncludeDeclaredCollectionInterfaces="$(MinimalJsonEmitDeclaredCollections)" IncludeDictionaries="$(MinimalJsonEmitDictionaries)">
+    <GenerateMinimalJsonSerializerContexts CompileFiles="@(Compile)" ReferencePaths="@(_MinimalJson_References)" OutputDirectory="$(MinimalJson_GeneratedDir)" LangVersion="$(LangVersion)" IncludeArrays="$(MinimalJsonEmitArrays)" IncludeList="$(MinimalJsonEmitList)" IncludeDeclaredCollectionInterfaces="$(MinimalJsonEmitDeclaredCollections)" IncludeDictionaries="$(MinimalJsonEmitDictionaries)" WarnOpenGenerics="$(MinimalJsonWarnOpenGenerics)">
       <Output TaskParameter="GeneratedFiles" ItemName="MinimalJsonGenerated" />
     </GenerateMinimalJsonSerializerContexts>
     <ItemGroup>

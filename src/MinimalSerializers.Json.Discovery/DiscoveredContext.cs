@@ -10,7 +10,7 @@ public sealed class DiscoveredContext
         string accessibility,
         bool isPartial,
         bool derivesFromJsonSerializerContext,
-        ImmutableArray<string> rootTypeDisplayNames,
+        ImmutableArray<DiscoveredRoot> roots,
         ImmutableArray<DiscoveryDiagnostic> diagnostics
     )
     {
@@ -19,7 +19,7 @@ public sealed class DiscoveredContext
         Accessibility = accessibility;
         IsPartial = isPartial;
         DerivesFromJsonSerializerContext = derivesFromJsonSerializerContext;
-        RootTypeDisplayNames = rootTypeDisplayNames;
+        Roots = roots;
         Diagnostics = diagnostics;
     }
 
@@ -28,7 +28,17 @@ public sealed class DiscoveredContext
     public string Accessibility { get; }
     public bool IsPartial { get; }
     public bool DerivesFromJsonSerializerContext { get; }
-    public ImmutableArray<string> RootTypeDisplayNames { get; }
+
+    /// <summary>Roots to emit as [JsonSerializable] attributes.</summary>
+    public ImmutableArray<DiscoveredRoot> Roots { get; }
+
+    /// <summary>
+    /// Convenience projection of <see cref="Roots"/> type display names (stable order).
+    /// Prefer <see cref="Roots"/> when TypeInfoPropertyName matters.
+    /// </summary>
+    public ImmutableArray<string> RootTypeDisplayNames =>
+        Roots.Select(static r => r.TypeDisplayName).ToImmutableArray();
+
     public ImmutableArray<DiscoveryDiagnostic> Diagnostics { get; }
 
     public string FullyQualifiedMetadataName =>

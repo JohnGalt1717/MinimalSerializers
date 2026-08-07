@@ -7,14 +7,14 @@ using System.Text.Json.Serialization;
 namespace Sample;
 
 [JsonSerializable(typeof(global::Sample.Color))]
-[JsonSerializable(typeof(global::Sample.Color[]))]
+[JsonSerializable(typeof(global::Sample.Color[]), TypeInfoPropertyName = "ArrayOf_Color")]
 [JsonSerializable(typeof(global::Sample.Leaf))]
-[JsonSerializable(typeof(global::Sample.Leaf[]))]
+[JsonSerializable(typeof(global::Sample.Leaf[]), TypeInfoPropertyName = "ArrayOf_Leaf")]
 [JsonSerializable(typeof(global::Sample.Root))]
-[JsonSerializable(typeof(global::Sample.Root[]))]
-[JsonSerializable(typeof(global::System.Collections.Generic.List<global::Sample.Color>))]
-[JsonSerializable(typeof(global::System.Collections.Generic.List<global::Sample.Leaf>))]
-[JsonSerializable(typeof(global::System.Collections.Generic.List<global::Sample.Root>))]
+[JsonSerializable(typeof(global::Sample.Root[]), TypeInfoPropertyName = "ArrayOf_Root")]
+[JsonSerializable(typeof(global::System.Collections.Generic.List<global::Sample.Color>), TypeInfoPropertyName = "ListOf_Color")]
+[JsonSerializable(typeof(global::System.Collections.Generic.List<global::Sample.Leaf>), TypeInfoPropertyName = "ListOf_Leaf")]
+[JsonSerializable(typeof(global::System.Collections.Generic.List<global::Sample.Root>), TypeInfoPropertyName = "ListOf_Root")]
 public partial class AppJsonContext
 {
 }

@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
@@ -30,6 +28,11 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
     public bool IncludeList { get; set; } = true;
     public bool IncludeDeclaredCollectionInterfaces { get; set; } = true;
     public bool IncludeDictionaries { get; set; } = true;
+
+    /// <summary>
+    /// MSJ0004 open-generic warning mode: summary (default), all, or none.
+    /// </summary>
+    public string WarnOpenGenerics { get; set; } = "summary";
 
     [Output]
     public ITaskItem[] GeneratedFiles { get; set; } = [];
@@ -108,6 +111,7 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
                 IncludeList = IncludeList,
                 IncludeDeclaredCollectionInterfaces = IncludeDeclaredCollectionInterfaces,
                 IncludeDictionaries = IncludeDictionaries,
+                OpenGenericWarningMode = ParseOpenGenericWarningMode(WarnOpenGenerics),
             };
 
             var result = JsonSerializableRootCollector.Collect(compilation, options);
@@ -202,6 +206,22 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
                 Log.LogMessage(MessageImportance.Normal, "{0}: {1}", d.Id, d.Message);
                 break;
         }
+    }
+
+    private static OpenGenericWarningMode ParseOpenGenericWarningMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return OpenGenericWarningMode.Summary;
+        }
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "all" or "verbose" or "each" => OpenGenericWarningMode.All,
+            "none" or "off" or "false" or "0" => OpenGenericWarningMode.None,
+            "summary" or "one" or "default" or "true" or "1" => OpenGenericWarningMode.Summary,
+            _ => OpenGenericWarningMode.Summary,
+        };
     }
 
     private static void WriteIfChanged(string path, string content)
