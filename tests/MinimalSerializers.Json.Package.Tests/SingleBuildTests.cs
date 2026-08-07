@@ -1,71 +1,69 @@
 using System.Diagnostics;
+using System.Text;
 using FluentAssertions;
+using Xunit;
 
 namespace MinimalSerializers.Json.Package.Tests;
 
+/// <summary>
+/// Package acceptance: one shared pack per class (not per test) and sequential
+/// execution so concurrent packs cannot lock Tasks/bin outputs on CI.
+/// </summary>
+[Collection(nameof(PackageAcceptanceCollection))]
 public sealed class SingleBuildTests
 {
+    private readonly PackageFeedFixture _feed;
+
+    public SingleBuildTests(PackageFeedFixture feed) => _feed = feed;
+
     [Fact]
     public void Pack_consume_and_single_build_includes_datacontract_roots()
     {
-        var repoRoot = FindRepoRoot();
-        var artifacts = CreateArtifactsDir();
-        var feed = Path.Combine(artifacts, "feed");
-        Directory.CreateDirectory(feed);
+        var consumer = _feed.CreateConsumer("Consumer");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+                using System.Runtime.Serialization;
+                using System.Text.Json.Serialization;
+                using MinimalSerializers.Json;
 
-        var packageVersion = PackToFeed(repoRoot, feed);
-        var consumer = Path.Combine(artifacts, "Consumer");
-        Directory.CreateDirectory(consumer);
-        WriteIsolatedConsumerProject(consumer, feed, packageVersion);
+                namespace Consumer;
 
-        File.WriteAllText(
-            Path.Combine(consumer, "Models.cs"),
-            """
-            using System.Runtime.Serialization;
-            using System.Text.Json.Serialization;
-            using MinimalSerializers.Json;
+                [DataContract]
+                public sealed class FooDto
+                {
+                    [DataMember]
+                    public required string Name { get; init; }
+                }
 
-            namespace Consumer;
+                [MinimalJsonSerializerContext]
+                public partial class ConsumerJsonContext : JsonSerializerContext;
+                """,
+            program: """
+                using System.Text.Json;
+                using Consumer;
 
-            [DataContract]
-            public sealed class FooDto
-            {
-                [DataMember]
-                public required string Name { get; init; }
-            }
-
-            [MinimalJsonSerializerContext]
-            public partial class ConsumerJsonContext : JsonSerializerContext;
-            """
+                var options = new JsonSerializerOptions { TypeInfoResolver = ConsumerJsonContext.Default };
+                if (options.GetTypeInfo(typeof(FooDto)) is null) throw new Exception("FooDto missing");
+                if (options.GetTypeInfo(typeof(FooDto[])) is null) throw new Exception("FooDto[] missing");
+                if (options.GetTypeInfo(typeof(List<FooDto>)) is null) throw new Exception("List<FooDto> missing");
+                var json = JsonSerializer.Serialize(new FooDto { Name = "x" }, options);
+                _ = JsonSerializer.Deserialize<FooDto>(json, options);
+                Console.WriteLine("ok");
+                """
         );
 
-        File.WriteAllText(
-            Path.Combine(consumer, "Program.cs"),
-            """
-            using System.Text.Json;
-            using Consumer;
+        var build1 = _feed.Dotnet(consumer, "build --nologo");
+        build1.ExitCode.Should().Be(0, because: build1.Output);
+        build1.Output.Should().NotContain("SYSLIB1031");
 
-            var options = new JsonSerializerOptions { TypeInfoResolver = ConsumerJsonContext.Default };
-            if (options.GetTypeInfo(typeof(FooDto)) is null) throw new Exception("FooDto missing");
-            if (options.GetTypeInfo(typeof(FooDto[])) is null) throw new Exception("FooDto[] missing");
-            if (options.GetTypeInfo(typeof(List<FooDto>)) is null) throw new Exception("List<FooDto> missing");
-            var json = JsonSerializer.Serialize(new FooDto { Name = "x" }, options);
-            _ = JsonSerializer.Deserialize<FooDto>(json, options);
-            Console.WriteLine("ok");
-            """
-        );
-
-        Run(consumer, "dotnet", "restore --nologo");
-        var build1 = RunCapture(consumer, "dotnet", "build --no-restore --nologo");
-        build1.ExitCode.Should().Be(0, because: build1.StdOutAndErr);
-        build1.StdOutAndErr.Should().NotContain("SYSLIB1031");
         var generated = Directory.GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories);
         generated.Should().NotBeEmpty("generated MinimalJson file should exist after one build");
         var generatedText = File.ReadAllText(generated[0]);
         generatedText.Should().Contain("FooDto");
         generatedText.Should().Contain("TypeInfoPropertyName = \"ListOf_");
 
-        Run(consumer, "dotnet", "run --no-build --nologo");
+        _feed.Dotnet(consumer, "run --no-build --nologo").ExitCode.Should().Be(0);
 
         File.AppendAllText(
             Path.Combine(consumer, "Models.cs"),
@@ -79,7 +77,7 @@ public sealed class SingleBuildTests
             }
             """
         );
-        Run(consumer, "dotnet", "build --nologo");
+        _feed.Dotnet(consumer, "build --nologo").ExitCode.Should().Be(0);
         var generated2 = Directory.GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories);
         File.ReadAllText(generated2.Single()).Should().Contain("BarDto");
     }
@@ -87,78 +85,64 @@ public sealed class SingleBuildTests
     [Fact]
     public void ListStarDto_with_EmitList_builds_without_SYSLIB1031()
     {
-        var repoRoot = FindRepoRoot();
-        var artifacts = CreateArtifactsDir();
-        var feed = Path.Combine(artifacts, "feed");
-        Directory.CreateDirectory(feed);
+        var consumer = _feed.CreateConsumer("ConsumerList");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+                using System.Runtime.Serialization;
+                using System.Text.Json.Serialization;
+                using MinimalSerializers.Json;
 
-        var packageVersion = PackToFeed(repoRoot, feed);
-        var consumer = Path.Combine(artifacts, "ConsumerList");
-        Directory.CreateDirectory(consumer);
-        WriteIsolatedConsumerProject(consumer, feed, packageVersion);
+                namespace Consumer;
 
-        File.WriteAllText(
-            Path.Combine(consumer, "Models.cs"),
-            """
-            using System.Runtime.Serialization;
-            using System.Text.Json.Serialization;
-            using MinimalSerializers.Json;
+                [DataContract]
+                public sealed record MoneyDetailsDto
+                {
+                    [DataMember] public required string Id { get; init; }
+                }
 
-            namespace Consumer;
+                [DataContract]
+                public sealed record ListMoneyDetailsDto
+                {
+                    [DataMember] public required MoneyDetailsDto[] Items { get; init; }
+                }
 
-            [DataContract]
-            public sealed record MoneyDetailsDto
-            {
-                [DataMember] public required string Id { get; init; }
-            }
+                [DataContract]
+                public sealed record ListOrderDto
+                {
+                    [DataMember] public required string Id { get; init; }
+                }
 
-            [DataContract]
-            public sealed record ListMoneyDetailsDto
-            {
-                [DataMember] public required MoneyDetailsDto[] Items { get; init; }
-            }
+                [MinimalJsonSerializerContext]
+                [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+                public partial class AppJsonSerializerContext : JsonSerializerContext;
+                """,
+            program: """
+                using System.Text.Json;
+                using Consumer;
 
-            [DataContract]
-            public sealed record ListOrderDto
-            {
-                [DataMember] public required string Id { get; init; }
-            }
+                var options = new JsonSerializerOptions { TypeInfoResolver = AppJsonSerializerContext.Default };
+                if (options.GetTypeInfo(typeof(ListMoneyDetailsDto)) is null) throw new Exception("ListMoneyDetailsDto missing");
+                if (options.GetTypeInfo(typeof(ListOrderDto)) is null) throw new Exception("ListOrderDto missing");
+                if (options.GetTypeInfo(typeof(MoneyDetailsDto)) is null) throw new Exception("MoneyDetailsDto missing");
+                if (options.GetTypeInfo(typeof(List<MoneyDetailsDto>)) is null) throw new Exception("List<MoneyDetailsDto> missing");
+                if (options.GetTypeInfo(typeof(List<ListMoneyDetailsDto>)) is null) throw new Exception("List<ListMoneyDetailsDto> missing");
+                if (options.GetTypeInfo(typeof(ListMoneyDetailsDto[])) is null) throw new Exception("ListMoneyDetailsDto[] missing");
 
-            [MinimalJsonSerializerContext]
-            [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
-            public partial class AppJsonSerializerContext : JsonSerializerContext;
-            """
+                var payload = new ListMoneyDetailsDto
+                {
+                    Items = [new MoneyDetailsDto { Id = "1" }],
+                };
+                var json = JsonSerializer.Serialize(payload, options);
+                _ = JsonSerializer.Deserialize<ListMoneyDetailsDto>(json, options);
+                Console.WriteLine("ok-list");
+                """
         );
 
-        File.WriteAllText(
-            Path.Combine(consumer, "Program.cs"),
-            """
-            using System.Text.Json;
-            using Consumer;
-
-            var options = new JsonSerializerOptions { TypeInfoResolver = AppJsonSerializerContext.Default };
-            if (options.GetTypeInfo(typeof(ListMoneyDetailsDto)) is null) throw new Exception("ListMoneyDetailsDto missing");
-            if (options.GetTypeInfo(typeof(ListOrderDto)) is null) throw new Exception("ListOrderDto missing");
-            if (options.GetTypeInfo(typeof(MoneyDetailsDto)) is null) throw new Exception("MoneyDetailsDto missing");
-            if (options.GetTypeInfo(typeof(List<MoneyDetailsDto>)) is null) throw new Exception("List<MoneyDetailsDto> missing");
-            if (options.GetTypeInfo(typeof(List<ListMoneyDetailsDto>)) is null) throw new Exception("List<ListMoneyDetailsDto> missing");
-            if (options.GetTypeInfo(typeof(ListMoneyDetailsDto[])) is null) throw new Exception("ListMoneyDetailsDto[] missing");
-
-            var payload = new ListMoneyDetailsDto
-            {
-                Items = [new MoneyDetailsDto { Id = "1" }],
-            };
-            var json = JsonSerializer.Serialize(payload, options);
-            _ = JsonSerializer.Deserialize<ListMoneyDetailsDto>(json, options);
-            Console.WriteLine("ok-list");
-            """
-        );
-
-        Run(consumer, "dotnet", "restore --nologo");
-        var build = RunCapture(consumer, "dotnet", "build --no-restore --nologo");
-        build.ExitCode.Should().Be(0, because: build.StdOutAndErr);
-        build.StdOutAndErr.Should().NotContain("SYSLIB1031");
-        build.StdOutAndErr.Should().NotContain("error CS");
+        var build = _feed.Dotnet(consumer, "build --nologo");
+        build.ExitCode.Should().Be(0, because: build.Output);
+        build.Output.Should().NotContain("SYSLIB1031");
+        build.Output.Should().NotContain("error CS");
 
         var generated = Directory.GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories).Single();
         var text = File.ReadAllText(generated);
@@ -166,104 +150,126 @@ public sealed class SingleBuildTests
         text.Should().Contain("TypeInfoPropertyName = \"ListOf_");
         text.Should().Contain("[JsonSerializable(typeof(global::Consumer.ListMoneyDetailsDto))]");
 
-        Run(consumer, "dotnet", "run --no-build --nologo");
+        _feed.Dotnet(consumer, "run --no-build --nologo").ExitCode.Should().Be(0);
     }
 
     [Fact]
     public void Generic_dto_inheritance_emits_MSJ0009_and_does_not_fail_discovery()
     {
-        var repoRoot = FindRepoRoot();
-        var artifacts = CreateArtifactsDir();
-        var feed = Path.Combine(artifacts, "feed");
-        Directory.CreateDirectory(feed);
+        var consumer = _feed.CreateConsumer("ConsumerGeneric");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+                using System;
+                using System.Collections.Generic;
+                using System.Runtime.Serialization;
+                using System.Text.Json.Serialization;
+                using MinimalSerializers.Json;
 
-        var packageVersion = PackToFeed(repoRoot, feed);
-        var consumer = Path.Combine(artifacts, "ConsumerGeneric");
-        Directory.CreateDirectory(consumer);
-        WriteIsolatedConsumerProject(consumer, feed, packageVersion);
+                namespace Consumer;
 
-        File.WriteAllText(
-            Path.Combine(consumer, "Models.cs"),
-            """
-            using System;
-            using System.Collections.Generic;
-            using System.Runtime.Serialization;
-            using System.Text.Json.Serialization;
-            using MinimalSerializers.Json;
+                public enum CategoryFields
+                {
+                    Name = 0,
+                    Code = 1,
+                }
 
-            namespace Consumer;
+                [DataContract]
+                public record QuerySubGroupResultDto<TFields>
+                    where TFields : Enum
+                {
+                    [DataMember] public required TFields FieldName { get; init; }
+                    [DataMember] public required string? Value { get; init; }
+                }
 
-            public enum CategoryFields
-            {
-                Name = 0,
-                Code = 1,
-            }
+                [DataContract]
+                public sealed record QueryGroupResultDto<TFields> : QuerySubGroupResultDto<TFields>
+                    where TFields : Enum
+                {
+                    [DataMember]
+                    public IReadOnlyCollection<QuerySubGroupResultDto<TFields>>? SubGroupResults { get; init; }
+                }
 
-            [DataContract]
-            public record QuerySubGroupResultDto<TFields>
-                where TFields : Enum
-            {
-                [DataMember] public required TFields FieldName { get; init; }
-                [DataMember] public required string? Value { get; init; }
-            }
+                [DataContract]
+                public sealed record HolderDto
+                {
+                    [DataMember]
+                    public required QueryGroupResultDto<CategoryFields> Group { get; init; }
+                }
 
-            [DataContract]
-            public sealed record QueryGroupResultDto<TFields> : QuerySubGroupResultDto<TFields>
-                where TFields : Enum
-            {
-                [DataMember]
-                public IReadOnlyCollection<QuerySubGroupResultDto<TFields>>? SubGroupResults { get; init; }
-            }
+                [MinimalJsonSerializerContext]
+                public partial class AppJsonSerializerContext : JsonSerializerContext;
+                """,
+            program: """
+                using System.Text.Json;
+                using Consumer;
 
-            [DataContract]
-            public sealed record HolderDto
-            {
-                [DataMember]
-                public required QueryGroupResultDto<CategoryFields> Group { get; init; }
-            }
-
-            [MinimalJsonSerializerContext]
-            public partial class AppJsonSerializerContext : JsonSerializerContext;
-            """
+                var options = new JsonSerializerOptions { TypeInfoResolver = AppJsonSerializerContext.Default };
+                if (options.GetTypeInfo(typeof(HolderDto)) is null) throw new Exception("HolderDto missing");
+                Console.WriteLine("ok-generic");
+                """
         );
 
-        File.WriteAllText(
-            Path.Combine(consumer, "Program.cs"),
-            """
-            using System.Text.Json;
-            using Consumer;
-
-            // Prefer options GetTypeInfo so we do not depend on STJ nested accessor naming.
-            var options = new JsonSerializerOptions { TypeInfoResolver = AppJsonSerializerContext.Default };
-            if (options.GetTypeInfo(typeof(HolderDto)) is null) throw new Exception("HolderDto missing");
-            Console.WriteLine("ok-generic");
-            """
-        );
-
-        Run(consumer, "dotnet", "restore --nologo");
-        var build = RunCapture(consumer, "dotnet", "build --no-restore --nologo");
-
+        var build = _feed.Dotnet(consumer, "build --nologo");
         // Discovery must surface MSJ0009 rather than only a cryptic STJ CS0102.
-        build.StdOutAndErr.Should().Contain("MSJ0009", because: build.StdOutAndErr);
+        build.Output.Should().Contain("MSJ0009", because: build.Output);
 
         var generated = Directory.GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories);
-        generated.Should().NotBeEmpty(because: build.StdOutAndErr);
+        generated.Should().NotBeEmpty(because: build.Output);
         var text = File.ReadAllText(generated[0]);
         text.Should().Contain("QueryGroupResultDto");
         text.Should().Contain("QuerySubGroupResultDto");
         text.Should().Contain("HolderDto");
     }
 
-    private static string CreateArtifactsDir()
+    private static void WriteModelsAndProgram(string consumer, string models, string program)
     {
-        var artifacts = Path.Combine(Path.GetTempPath(), "minimaljson-pkg-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(artifacts);
-        return artifacts;
+        File.WriteAllText(Path.Combine(consumer, "Models.cs"), models);
+        File.WriteAllText(Path.Combine(consumer, "Program.cs"), program);
+    }
+}
+
+[CollectionDefinition(nameof(PackageAcceptanceCollection), DisableParallelization = true)]
+public sealed class PackageAcceptanceCollection : ICollectionFixture<PackageFeedFixture>;
+
+/// <summary>
+/// Packs MinimalSerializers.Json once and reuses the local feed for all package tests.
+/// </summary>
+public sealed class PackageFeedFixture : IDisposable
+{
+    public PackageFeedFixture()
+    {
+        RepoRoot = FindRepoRoot();
+        Artifacts = Path.Combine(Path.GetTempPath(), "minimaljson-pkg-tests", Guid.NewGuid().ToString("N"));
+        Feed = Path.Combine(Artifacts, "feed");
+        Directory.CreateDirectory(Feed);
+
+        var baseVersion = ReadPackageVersion(RepoRoot);
+        // Unique version avoids colliding with a stale global NuGet cache entry.
+        PackageVersion = baseVersion + "-pkg." + Guid.NewGuid().ToString("N")[..8];
+
+        // Single pack for the whole class. Do not pack per-test (slow + file-lock risk on CI).
+        var pack = Dotnet(
+            RepoRoot,
+            $"pack \"{Path.Combine(RepoRoot, "src/MinimalSerializers.Json/MinimalSerializers.Json.csproj")}\" -c Release -o \"{Feed}\" --nologo -p:Version={PackageVersion} -p:PackageVersion={PackageVersion}"
+        );
+        if (pack.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"pack failed\n{pack.Output}");
+        }
     }
 
-    private static void WriteIsolatedConsumerProject(string consumer, string feed, string packageVersion)
+    public string RepoRoot { get; }
+    public string Artifacts { get; }
+    public string Feed { get; }
+    public string PackageVersion { get; }
+
+    public string CreateConsumer(string name)
     {
+        var consumer = Path.Combine(Artifacts, name);
+        Directory.CreateDirectory(consumer);
         Directory.CreateDirectory(Path.Combine(consumer, "packages"));
+
         File.WriteAllText(
             Path.Combine(consumer, "Directory.Build.props"),
             $$"""
@@ -282,7 +288,7 @@ public sealed class SingleBuildTests
             <configuration>
               <packageSources>
                 <clear />
-                <add key="local" value="{feed}" />
+                <add key="local" value="{Feed}" />
                 <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
               </packageSources>
             </configuration>
@@ -299,24 +305,30 @@ public sealed class SingleBuildTests
                 <Nullable>enable</Nullable>
               </PropertyGroup>
               <ItemGroup>
-                <PackageReference Include="MinimalSerializers.Json" Version="{packageVersion}" />
+                <PackageReference Include="MinimalSerializers.Json" Version="{PackageVersion}" />
               </ItemGroup>
             </Project>
             """
         );
+        return consumer;
     }
 
-    private static string PackToFeed(string repoRoot, string feed)
+    public (int ExitCode, string Output) Dotnet(string cwd, string args) =>
+        Run(cwd, "dotnet", args);
+
+    public void Dispose()
     {
-        var packageVersion = ReadPackageVersion(repoRoot);
-        // Unique version per run avoids colliding with a stale global NuGet cache entry.
-        var uniqueVersion = packageVersion + "-pkg." + Guid.NewGuid().ToString("N")[..8];
-        Run(
-            repoRoot,
-            "dotnet",
-            $"pack \"{Path.Combine(repoRoot, "src/MinimalSerializers.Json/MinimalSerializers.Json.csproj")}\" -c Release -o \"{feed}\" --nologo -p:Version={uniqueVersion} -p:PackageVersion={uniqueVersion}"
-        );
-        return uniqueVersion;
+        try
+        {
+            if (Directory.Exists(Artifacts))
+            {
+                Directory.Delete(Artifacts, recursive: true);
+            }
+        }
+        catch
+        {
+            // best-effort temp cleanup
+        }
     }
 
     private static string ReadPackageVersion(string repoRoot)
@@ -350,16 +362,7 @@ public sealed class SingleBuildTests
         throw new InvalidOperationException("Could not locate repo root.");
     }
 
-    private static void Run(string cwd, string fileName, string args)
-    {
-        var result = RunCapture(cwd, fileName, args);
-        if (result.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"{fileName} {args}\nEXIT {result.ExitCode}\n{result.StdOutAndErr}");
-        }
-    }
-
-    private static (int ExitCode, string StdOutAndErr) RunCapture(string cwd, string fileName, string args)
+    private static (int ExitCode, string Output) Run(string cwd, string fileName, string args)
     {
         var psi = new ProcessStartInfo
         {
@@ -374,6 +377,13 @@ public sealed class SingleBuildTests
         var stdout = p.StandardOutput.ReadToEnd();
         var stderr = p.StandardError.ReadToEnd();
         p.WaitForExit();
-        return (p.ExitCode, stdout + "\n" + stderr);
+        var output = new StringBuilder();
+        output.Append(stdout);
+        if (stderr.Length > 0)
+        {
+            output.Append('\n').Append(stderr);
+        }
+
+        return (p.ExitCode, output.ToString());
     }
 }

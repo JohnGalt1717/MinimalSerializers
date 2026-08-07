@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.0.3
+
+- Speed up package acceptance tests: pack once per class, disable parallelization (avoids CI hang from concurrent Tasks rebuilds)
+- Includes 1.0.2 fixes: TypeInfoPropertyName for collection roots, MSJ0009 generic inheritance diagnostic, quieter MSJ0004
+
 ## 1.0.2
 
 - Assign `TypeInfoPropertyName` for `List<T>` / array / collection roots to avoid SYSLIB1031 collisions with `List*Dto` types (#2)
