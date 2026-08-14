@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.0.4
+
+- MSJ0004 no longer warns for abstract open `[DataContract]` generics (they are still skipped as roots). Closed instantiations stay registered.
+
 ## 1.0.3
 
 - Speed up package acceptance tests: pack once per class, disable parallelization (avoids CI hang from concurrent Tasks rebuilds)

@@ -81,7 +81,9 @@ public sealed class RootCollectorTests
         ctx.TypeName.Should().Be("TestJsonContext");
 
         var roots = ctx.RootTypeDisplayNames;
-        roots.Should().Contain(r => r.Contains("ParentDto") && !r.Contains("List") && !r.EndsWith("[]"));
+        roots
+            .Should()
+            .Contain(r => r.Contains("ParentDto") && !r.Contains("List") && !r.EndsWith("[]"));
         roots.Should().Contain(r => r.Contains("ParentDto[]"));
         roots.Should().Contain(r => r.Contains("List<") && r.Contains("ParentDto"));
         roots.Should().Contain(r => r.Contains("ChildDto"));
@@ -113,7 +115,10 @@ public sealed class RootCollectorTests
         msj0004.Should().ContainSingle();
         msj0004[0].Message.Should().Contain("Skipped");
         msj0004[0].Message.Should().Contain("open generic");
-        result.Contexts[0].RootTypeDisplayNames.Should().NotContain(r => r.Contains("WrapperDto<T>"));
+        result
+            .Contexts[0]
+            .RootTypeDisplayNames.Should()
+            .NotContain(r => r.Contains("WrapperDto<T>"));
     }
 
     [Fact]
@@ -148,6 +153,35 @@ public sealed class RootCollectorTests
         var openGeneric = result.Diagnostics.Where(d => d.Id == "MSJ0004").ToList();
         openGeneric.Should().HaveCount(2);
         openGeneric.Should().OnlyContain(d => d.Message.Contains("was skipped"));
+    }
+
+    [Fact]
+    public void Abstract_open_generic_datacontract_does_not_warn()
+    {
+        const string source = """
+            using System;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            [DataContract]
+            public abstract record QueryRequestDto<TFields>
+                where TFields : Enum
+            {
+                [DataMember] public int? Skip { get; init; }
+            }
+
+            [DataContract]
+            public sealed record ClosedRequest : QueryRequestDto<DayOfWeek>;
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+        var compilation = CompilationHelper.Create(source);
+        var result = JsonSerializableRootCollector.Collect(compilation);
+        result.Diagnostics.Should().NotContain(d => d.Id == "MSJ0004");
+        result.Contexts[0].RootTypeDisplayNames.Should().Contain(r => r.Contains("ClosedRequest"));
     }
 
     [Fact]
@@ -295,7 +329,9 @@ public sealed class RootCollectorTests
 
         // Closed constructions still registered.
         var roots = result.Contexts[0].RootTypeDisplayNames;
-        roots.Should().Contain(r => r.Contains("QueryGroupResultDto") && r.Contains("CategoryFields"));
+        roots
+            .Should()
+            .Contain(r => r.Contains("QueryGroupResultDto") && r.Contains("CategoryFields"));
         roots
             .Should()
             .Contain(r => r.Contains("QuerySubGroupResultDto") && r.Contains("CategoryFields"));
@@ -326,7 +362,10 @@ public sealed class RootCollectorTests
         var compilation = CompilationHelper.Create(source);
         var result = JsonSerializableRootCollector.Collect(compilation);
         result.Contexts.Should().ContainSingle();
-        result.Contexts[0].Diagnostics.Should().Contain(d => d.Id == "MSJ0003" && d.Severity == DiscoveryDiagnosticSeverity.Error);
+        result
+            .Contexts[0]
+            .Diagnostics.Should()
+            .Contain(d => d.Id == "MSJ0003" && d.Severity == DiscoveryDiagnosticSeverity.Error);
     }
 
     [Fact]

@@ -232,7 +232,12 @@ public static class JsonSerializableRootCollector
 
             if (IsOpenGeneric(type))
             {
-                openGenericSkips.Add(type.ToDisplayString());
+                // Abstract open generics are intentional bases (QueryRequestDto<T>, etc.).
+                // Still skip them as roots; do not warn. Concrete open generics still warn.
+                if (!type.IsAbstract)
+                {
+                    openGenericSkips.Add(type.ToDisplayString());
+                }
                 // Surface the STJ CS0102 footgun on the open definition as well as closed uses.
                 DiagnoseGenericDtoInheritance(
                     type,
@@ -279,7 +284,11 @@ public static class JsonSerializableRootCollector
             switch (current)
             {
                 case IArrayTypeSymbol array:
-                    AddArrayRoot(rootsByDisplay, array, mangle: !IsPrimitiveLike(array.ElementType));
+                    AddArrayRoot(
+                        rootsByDisplay,
+                        array,
+                        mangle: !IsPrimitiveLike(array.ElementType)
+                    );
                     Enqueue(array.ElementType);
                     continue;
                 case INamedTypeSymbol named
@@ -662,7 +671,10 @@ public static class JsonSerializableRootCollector
             else if (
                 existing.TypeInfoPropertyName is not null
                 && root.TypeInfoPropertyName is not null
-                && existing.TypeInfoPropertyName.StartsWith("CollectionOf_", StringComparison.Ordinal)
+                && existing.TypeInfoPropertyName.StartsWith(
+                    "CollectionOf_",
+                    StringComparison.Ordinal
+                )
                 && root.TypeInfoPropertyName.StartsWith("ListOf_", StringComparison.Ordinal)
             )
             {
