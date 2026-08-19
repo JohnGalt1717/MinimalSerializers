@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.0.5
+
+- Invalidate `stamp.minimaljson` before the incremental skip when `*.MinimalJson.g.cs` is missing, so a leftover stamp cannot produce CS0534 (#7)
+
 ## 1.0.4
 
 - MSJ0004 no longer warns for abstract open `[DataContract]` generics (they are still skipped as roots). Closed instantiations stay registered.
