@@ -236,6 +236,84 @@ public sealed class SingleBuildTests
         text.Should().Contain("HolderDto");
     }
 
+    [Fact]
+    public void Stamp_without_generated_sources_incremental_build_regenerates()
+    {
+        var consumer = _feed.CreateConsumer("ConsumerStampSkip");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Consumer;
+
+            [DataContract]
+            public sealed class FooDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class ConsumerJsonContext : JsonSerializerContext;
+            """,
+            program: """
+            using System.Text.Json;
+            using Consumer;
+
+            var options = new JsonSerializerOptions { TypeInfoResolver = ConsumerJsonContext.Default };
+            if (options.GetTypeInfo(typeof(FooDto)) is null) throw new Exception("FooDto missing");
+            Console.WriteLine("ok-stamp");
+            """
+        );
+
+        var build1 = _feed.Dotnet(consumer, "build --nologo");
+        build1.ExitCode.Should().Be(0, because: build1.Output);
+
+        var generated = Directory.GetFiles(
+            consumer,
+            "*.MinimalJson.g.cs",
+            SearchOption.AllDirectories
+        );
+        generated.Should().NotBeEmpty("generated MinimalJson file should exist after first build");
+        var stamps = Directory.GetFiles(
+            consumer,
+            "stamp.minimaljson",
+            SearchOption.AllDirectories
+        );
+        stamps.Should().NotBeEmpty("stamp.minimaljson should exist after first build");
+
+        foreach (var path in generated)
+        {
+            File.Delete(path);
+        }
+
+        Directory
+            .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+            .Should()
+            .BeEmpty();
+        File.Exists(stamps[0]).Should().BeTrue("stamp must remain so this is an incremental skip");
+
+        var incremental = _feed.Dotnet(consumer, "build --nologo");
+        incremental.ExitCode.Should().Be(0, because: incremental.Output);
+        incremental.Output.Should().NotContain("CS0534");
+        incremental.Output.Should().NotContain("error CS");
+
+        Directory
+            .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+            .Should()
+            .NotBeEmpty("incremental build must regenerate *.MinimalJson.g.cs when stamp is stale");
+        File.ReadAllText(
+                Directory
+                    .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+                    .Single()
+            )
+            .Should()
+            .Contain("FooDto");
+    }
+
     private static void WriteModelsAndProgram(string consumer, string models, string program)
     {
         File.WriteAllText(Path.Combine(consumer, "Models.cs"), models);
@@ -263,8 +341,8 @@ public sealed class PackageFeedFixture : IDisposable
         Directory.CreateDirectory(Feed);
 
         var baseVersion = ReadPackageVersion(RepoRoot);
-        // Unique version avoids colliding with a stale global NuGet cache entry.
-        PackageVersion = baseVersion + "-pkg." + Guid.NewGuid().ToString("N")[..8];
+        // Unique SemVer 2.0 prerelease: numeric identifiers cannot have leading zeros.
+        PackageVersion = baseVersion + "-pkg.a" + Guid.NewGuid().ToString("N")[..8];
 
         // Single pack for the whole class. Sequential, and skip rebuild when CI already built Tasks.
         var jsonCsproj = Path.Combine(

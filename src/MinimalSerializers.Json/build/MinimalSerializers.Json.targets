@@ -35,7 +35,16 @@
     <Error Text="MinimalSerializers.Json task assembly was not found at '$(MinimalJson_TaskAssembly)'. Build MinimalSerializers.Json.Tasks or restore the NuGet package." Condition="!Exists('$(MinimalJson_TaskAssembly)')" Code="MSJ0007" />
   </Target>
 
-  <Target Name="MinimalJson_GenerateContexts" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt" Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''" Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath)" Outputs="$(MinimalJson_GeneratedDir)stamp.minimaljson">
+  <!-- Must run with no Inputs/Outputs. A stamp without *.MinimalJson.g.cs must be
+       deleted before MinimalJson_GenerateContexts decides it is up-to-date. -->
+  <Target Name="MinimalJson_InvalidateStaleStamp" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
+    <ItemGroup>
+      <_MinimalJson_GeneratedExisting Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" Condition="Exists('$(MinimalJson_GeneratedDir)')" />
+    </ItemGroup>
+    <Delete Files="$(MinimalJson_GeneratedDir)stamp.minimaljson" Condition="Exists('$(MinimalJson_GeneratedDir)stamp.minimaljson') and '@(_MinimalJson_GeneratedExisting)' == ''" />
+  </Target>
+
+  <Target Name="MinimalJson_GenerateContexts" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt;MinimalJson_InvalidateStaleStamp" Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''" Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath)" Outputs="$(MinimalJson_GeneratedDir)stamp.minimaljson;$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs">
     <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
     <ItemGroup>
       <_MinimalJson_GeneratedExisting Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" Condition="Exists('$(MinimalJson_GeneratedDir)')" />
