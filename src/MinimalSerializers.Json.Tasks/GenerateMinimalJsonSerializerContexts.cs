@@ -222,6 +222,10 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
         }
     }
 
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false
+    );
+
     private const string DiscoveryImplicitUsings = """
         global using System;
         global using System.Collections.Generic;
@@ -275,8 +279,10 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
     {
         Directory.CreateDirectory(outputDirectory);
         var stamp = Path.Combine(outputDirectory, "stamp.minimaljson");
+        // Paths only (no timestamp). An empty stamp is valid: the project has no
+        // contexts, and InvalidateStaleStamp must not treat that as stale.
+        // Always rewrite so the stamp is newer than Inputs after this run.
         var payload = new StringBuilder();
-        payload.AppendLine(DateTime.UtcNow.ToString("O"));
         foreach (
             var path in generated
                 .Select(static g => g.ItemSpec)
@@ -286,7 +292,7 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
             payload.AppendLine(path);
         }
 
-        File.WriteAllText(stamp, payload.ToString(), Encoding.UTF8);
+        File.WriteAllText(stamp, payload.ToString(), Utf8NoBom);
     }
 
     private static void DeleteStamp(string outputDirectory)

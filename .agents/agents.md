@@ -28,9 +28,9 @@ Repo layout resolves the task DLL from `src/MinimalSerializers.Json.Tasks/bin/..
 lib/netX/MinimalSerializers.Json.dll
 buildTransitive/MinimalSerializers.Json.props
 buildTransitive/MinimalSerializers.Json.targets
-tasks/net8.0/MinimalSerializers.Json.Tasks.dll
-tasks/net8.0/MinimalSerializers.Json.Discovery.dll
-tasks/net8.0/Microsoft.CodeAnalysis*.dll
+tasks/net10.0/MinimalSerializers.Json.Tasks.dll
+tasks/net10.0/MinimalSerializers.Json.Discovery.dll
+tasks/net10.0/Microsoft.CodeAnalysis*.dll
 ```
 
 ## Commands
