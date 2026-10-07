@@ -6,9 +6,9 @@
     Do not gate UsingTask on Exists(task DLL). Clean CI builds the task before invocation.
   -->
   <PropertyGroup>
-    <_MinimalJson_PackagedTaskAssembly>$(MSBuildThisFileDirectory)../tasks/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_PackagedTaskAssembly>
-    <_MinimalJson_RepoTaskCandidate>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/$(Configuration)/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate>
-    <_MinimalJson_RepoTaskCandidate2>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/Debug/net8.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate2>
+    <_MinimalJson_PackagedTaskAssembly>$(MSBuildThisFileDirectory)../tasks/net10.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_PackagedTaskAssembly>
+    <_MinimalJson_RepoTaskCandidate>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/$(Configuration)/net10.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate>
+    <_MinimalJson_RepoTaskCandidate2>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/bin/Debug/net10.0/MinimalSerializers.Json.Tasks.dll</_MinimalJson_RepoTaskCandidate2>
     <_MinimalJson_TasksProject>$(MSBuildThisFileDirectory)../../MinimalSerializers.Json.Tasks/MinimalSerializers.Json.Tasks.csproj</_MinimalJson_TasksProject>
 
     <MinimalJson_TaskAssembly Condition="'$(MinimalJson_TaskAssembly)' == '' and Exists('$(_MinimalJson_PackagedTaskAssembly)')">$(_MinimalJson_PackagedTaskAssembly)</MinimalJson_TaskAssembly>
@@ -21,12 +21,18 @@
     <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">$(BaseIntermediateOutputPath)$(Configuration)/$(TargetFramework)/</_MinimalJson_BaseOut>
     <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">obj/$(Configuration)/</_MinimalJson_BaseOut>
     <MinimalJson_GeneratedDir>$(_MinimalJson_BaseOut)minimaljson/</MinimalJson_GeneratedDir>
+    <MinimalJson_StampFile>$(MinimalJson_GeneratedDir)stamp.minimaljson</MinimalJson_StampFile>
   </PropertyGroup>
+
+  <!-- Visual Studio fast up-to-date check: missing stamp means generation still needs to run. -->
+  <ItemGroup Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
+    <UpToDateCheckOutput Include="$(MinimalJson_StampFile)" />
+  </ItemGroup>
 
   <UsingTask TaskName="MinimalSerializers.Json.Tasks.GenerateMinimalJsonSerializerContexts" AssemblyFile="$(MinimalJson_TaskAssembly)" Condition="'$(MinimalJson_TaskAssembly)' != ''" />
 
   <Target Name="MinimalJson_EnsureTasksBuilt" BeforeTargets="MinimalJson_GenerateContexts" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
-    <MSBuild Projects="$(_MinimalJson_TasksProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0;NoBuild=false" Condition="Exists('$(_MinimalJson_TasksProject)') and !Exists('$(MinimalJson_TaskAssembly)') and '$(NoBuild)' != 'true'" />
+    <MSBuild Projects="$(_MinimalJson_TasksProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net10.0;NoBuild=false" Condition="Exists('$(_MinimalJson_TasksProject)') and !Exists('$(MinimalJson_TaskAssembly)') and '$(NoBuild)' != 'true'" />
     <PropertyGroup>
       <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_PackagedTaskAssembly)')">$(_MinimalJson_PackagedTaskAssembly)</MinimalJson_TaskAssembly>
       <MinimalJson_TaskAssembly Condition="Exists('$(_MinimalJson_RepoTaskCandidate)')">$(_MinimalJson_RepoTaskCandidate)</MinimalJson_TaskAssembly>
@@ -35,22 +41,42 @@
     <Error Text="MinimalSerializers.Json task assembly was not found at '$(MinimalJson_TaskAssembly)'. Build MinimalSerializers.Json.Tasks or restore the NuGet package." Condition="!Exists('$(MinimalJson_TaskAssembly)')" Code="MSJ0007" />
   </Target>
 
-  <!-- Must run with no Inputs/Outputs. A stamp without *.MinimalJson.g.cs must be
-       deleted before MinimalJson_GenerateContexts decides it is up-to-date. -->
+  <!-- Must run with no Inputs/Outputs so a missing *.MinimalJson.g.cs listed in the
+       stamp is detected before MinimalJson_GenerateContexts can skip. Do not delete
+       the stamp merely because the directory has no generated files: projects with
+       no [MinimalJsonSerializerContext] (including buildTransitive dependents)
+       write an empty stamp and must stay up-to-date. -->
   <Target Name="MinimalJson_InvalidateStaleStamp" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
     <ItemGroup>
-      <_MinimalJson_GeneratedExisting Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" Condition="Exists('$(MinimalJson_GeneratedDir)')" />
+      <_MinimalJson_StampLines Remove="@(_MinimalJson_StampLines)" />
+      <_MinimalJson_StampGenerated Remove="@(_MinimalJson_StampGenerated)" />
+      <_MinimalJson_MissingGenerated Remove="@(_MinimalJson_MissingGenerated)" />
     </ItemGroup>
-    <Delete Files="$(MinimalJson_GeneratedDir)stamp.minimaljson" Condition="Exists('$(MinimalJson_GeneratedDir)stamp.minimaljson') and '@(_MinimalJson_GeneratedExisting)' == ''" />
+    <ReadLinesFromFile File="$(MinimalJson_StampFile)" Condition="Exists('$(MinimalJson_StampFile)')">
+      <Output TaskParameter="Lines" ItemName="_MinimalJson_StampLines" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <!-- Ignore non-path lines (legacy UTC timestamps). Empty stamps are valid. -->
+      <_MinimalJson_StampGenerated Include="@(_MinimalJson_StampLines)" Condition="$([System.String]::Copy('%(Identity)').EndsWith('.MinimalJson.g.cs'))" />
+      <_MinimalJson_MissingGenerated Include="@(_MinimalJson_StampGenerated)" Condition="!Exists('%(Identity)')" />
+    </ItemGroup>
+    <Delete Files="$(MinimalJson_StampFile)" Condition="'@(_MinimalJson_MissingGenerated)' != ''" />
   </Target>
 
-  <Target Name="MinimalJson_GenerateContexts" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt;MinimalJson_InvalidateStaleStamp" Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''" Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath)" Outputs="$(MinimalJson_GeneratedDir)stamp.minimaljson;$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs">
+  <!-- Outputs must be the stamp file only. MSBuild does not expand ** globs in
+       Target Outputs, so listing $(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs
+       is treated as a literal missing path and the target runs every build.
+       Generated .cs files also cannot be Outputs: WriteIfChanged leaves their
+       timestamps older than Inputs, which keeps the target permanently dirty. -->
+  <Target Name="MinimalJson_GenerateContexts"
+          BeforeTargets="BeforeCompile;CoreCompile"
+          DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt;MinimalJson_InvalidateStaleStamp"
+          Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''"
+          Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath);$(MinimalJson_TaskAssembly)"
+          Outputs="$(MinimalJson_StampFile)">
     <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
     <ItemGroup>
-      <_MinimalJson_GeneratedExisting Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" Condition="Exists('$(MinimalJson_GeneratedDir)')" />
-    </ItemGroup>
-    <Delete Files="$(MinimalJson_GeneratedDir)stamp.minimaljson" Condition="Exists('$(MinimalJson_GeneratedDir)stamp.minimaljson') and '@(_MinimalJson_GeneratedExisting)' == ''" />
-    <ItemGroup>
+      <_MinimalJson_References Remove="@(_MinimalJson_References)" />
       <_MinimalJson_References Include="@(ReferencePath)" />
       <_MinimalJson_References Include="@(ReferencePathWithRefAssemblies)" />
       <_MinimalJson_References Include="@(RuntimeCopyLocalItems)" Condition="'@(RuntimeCopyLocalItems)' != ''" />
@@ -60,17 +86,18 @@
     </GenerateMinimalJsonSerializerContexts>
     <ItemGroup>
       <FileWrites Include="@(MinimalJsonGenerated)" />
-      <FileWrites Include="$(MinimalJson_GeneratedDir)stamp.minimaljson" />
+      <FileWrites Include="$(MinimalJson_StampFile)" />
     </ItemGroup>
   </Target>
 
   <Target Name="MinimalJson_IncludeGenerated" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="MinimalJson_GenerateContexts" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
     <ItemGroup>
-      <_MinimalJson_GeneratedExisting Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" Condition="Exists('$(MinimalJson_GeneratedDir)')" />
-    </ItemGroup>
-    <Delete Files="$(MinimalJson_GeneratedDir)stamp.minimaljson" Condition="Exists('$(MinimalJson_GeneratedDir)stamp.minimaljson') and '@(_MinimalJson_GeneratedExisting)' == ''" />
-    <ItemGroup>
+      <Compile Remove="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" />
       <Compile Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" Condition="Exists('$(MinimalJson_GeneratedDir)')" KeepDuplicates="false" />
+      <!-- Must always record FileWrites. If GenerateContexts is skipped, IncrementalClean
+           would otherwise delete *.MinimalJson.g.cs as stale intermediates. -->
+      <FileWrites Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" />
+      <FileWrites Include="$(MinimalJson_StampFile)" />
     </ItemGroup>
   </Target>
 </Project>

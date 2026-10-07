@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     <IsPackable>true</IsPackable>
     <PackageId>MinimalSerializers.Json</PackageId>
     <Description>Auto-generate System.Text.Json JsonSerializable roots from DataContract graphs before CoreCompile so the built-in STJ source generator can emit serializers in a single build.</Description>
@@ -10,7 +10,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <!-- CRITICAL: keep path values on one line (no leading whitespace). -->
     <BuildTaskProject>$(MSBuildThisFileDirectory)..\MinimalSerializers.Json.Tasks\MinimalSerializers.Json.Tasks.csproj</BuildTaskProject>
-    <BuildTaskOutputDir>$(MSBuildThisFileDirectory)..\MinimalSerializers.Json.Tasks\bin\$(Configuration)\net8.0\</BuildTaskOutputDir>
+    <BuildTaskOutputDir>$(MSBuildThisFileDirectory)..\MinimalSerializers.Json.Tasks\bin\$(Configuration)\net10.0\</BuildTaskOutputDir>
     <SuppressDependenciesWhenPacking>false</SuppressDependenciesWhenPacking>
   </PropertyGroup>
 
@@ -32,31 +32,31 @@
   <Target Name="MinimalJson_IncludeTaskAssets" BeforeTargets="_GetPackageFiles" Condition="'$(IsPackable)' == 'true'">
     <!-- Build task assets only when missing. Nested Build under pack NoBuild hits NETSDK1085. -->
     <!-- Always rebuild task assets on pack so targets/task API stay in sync (unless NoBuild). -->
-    <MSBuild Projects="$(BuildTaskProject)" Targets="Restore;Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0;NoBuild=false;BuildProjectReferences=true" Condition="'$(NoBuild)' != 'true'" />
-    <Error Code="MSJ0008" Text="MinimalSerializers.Json task assets were not found under '$(BuildTaskOutputDir)'. Build MinimalSerializers.Json.Tasks (net8.0) before packing, or pack without NoBuild." Condition="!Exists('$(BuildTaskOutputDir)MinimalSerializers.Json.Tasks.dll')" />
+    <MSBuild Projects="$(BuildTaskProject)" Targets="Restore;Build" Properties="Configuration=$(Configuration);TargetFramework=net10.0;NoBuild=false;BuildProjectReferences=true" Condition="'$(NoBuild)' != 'true'" />
+    <Error Code="MSJ0008" Text="MinimalSerializers.Json task assets were not found under '$(BuildTaskOutputDir)'. Build MinimalSerializers.Json.Tasks (net10.0) before packing, or pack without NoBuild." Condition="!Exists('$(BuildTaskOutputDir)MinimalSerializers.Json.Tasks.dll')" />
     <ItemGroup>
       <_PackageFiles Include="$(BuildTaskOutputDir)MinimalSerializers.Json.Tasks.dll">
-        <PackagePath>tasks/net8.0/</PackagePath>
+        <PackagePath>tasks/net10.0/</PackagePath>
         <BuildAction>None</BuildAction>
       </_PackageFiles>
       <_PackageFiles Include="$(BuildTaskOutputDir)MinimalSerializers.Json.Discovery.dll">
-        <PackagePath>tasks/net8.0/</PackagePath>
+        <PackagePath>tasks/net10.0/</PackagePath>
         <BuildAction>None</BuildAction>
       </_PackageFiles>
       <_PackageFiles Include="$(BuildTaskOutputDir)Microsoft.CodeAnalysis.dll" Condition="Exists('$(BuildTaskOutputDir)Microsoft.CodeAnalysis.dll')">
-        <PackagePath>tasks/net8.0/</PackagePath>
+        <PackagePath>tasks/net10.0/</PackagePath>
         <BuildAction>None</BuildAction>
       </_PackageFiles>
       <_PackageFiles Include="$(BuildTaskOutputDir)Microsoft.CodeAnalysis.CSharp.dll" Condition="Exists('$(BuildTaskOutputDir)Microsoft.CodeAnalysis.CSharp.dll')">
-        <PackagePath>tasks/net8.0/</PackagePath>
+        <PackagePath>tasks/net10.0/</PackagePath>
         <BuildAction>None</BuildAction>
       </_PackageFiles>
       <_PackageFiles Include="$(BuildTaskOutputDir)System.Collections.Immutable.dll" Condition="Exists('$(BuildTaskOutputDir)System.Collections.Immutable.dll')">
-        <PackagePath>tasks/net8.0/</PackagePath>
+        <PackagePath>tasks/net10.0/</PackagePath>
         <BuildAction>None</BuildAction>
       </_PackageFiles>
       <_PackageFiles Include="$(BuildTaskOutputDir)System.Reflection.Metadata.dll" Condition="Exists('$(BuildTaskOutputDir)System.Reflection.Metadata.dll')">
-        <PackagePath>tasks/net8.0/</PackagePath>
+        <PackagePath>tasks/net10.0/</PackagePath>
         <BuildAction>None</BuildAction>
       </_PackageFiles>
     </ItemGroup>

@@ -382,6 +382,212 @@ public sealed class SingleBuildTests
             .Contain("FooDto");
     }
 
+    [Fact]
+    public void Second_build_skips_generation_and_CoreCompile()
+    {
+        var consumer = _feed.CreateConsumer("ConsumerIncremental");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Consumer;
+
+            [DataContract]
+            public sealed class FooDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class ConsumerJsonContext : JsonSerializerContext;
+            """,
+            program: """
+            using System.Text.Json;
+            using Consumer;
+
+            var options = new JsonSerializerOptions { TypeInfoResolver = ConsumerJsonContext.Default };
+            if (options.GetTypeInfo(typeof(FooDto)) is null) throw new Exception("FooDto missing");
+            Console.WriteLine("ok-incremental");
+            """
+        );
+
+        var build1 = _feed.Dotnet(consumer, "build --nologo");
+        build1.ExitCode.Should().Be(0, because: build1.Output);
+
+        var stamp = Directory
+            .GetFiles(consumer, "stamp.minimaljson", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var generated = Directory
+            .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var dll = Directory
+            .GetFiles(Path.Combine(consumer, "bin"), "Consumer.dll", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        var stampTime = File.GetLastWriteTimeUtc(stamp);
+        var generatedTime = File.GetLastWriteTimeUtc(generated);
+        var dllTime = File.GetLastWriteTimeUtc(dll);
+
+        const string skipGenerate =
+            "Skipping target \"MinimalJson_GenerateContexts\" because all output files are up-to-date";
+
+        var incremental = _feed.Dotnet(consumer, "build -v:n --nologo");
+        incremental.ExitCode.Should().Be(0, because: incremental.Output);
+        incremental.Output.Should().Contain(skipGenerate, because: incremental.Output);
+        incremental
+            .Output.Should()
+            .Contain(
+                "Skipping target \"CoreCompile\" because all output files are up-to-date",
+                because: incremental.Output
+            );
+
+        File.GetLastWriteTimeUtc(stamp).Should().Be(stampTime);
+        File.GetLastWriteTimeUtc(generated).Should().Be(generatedTime);
+        File.GetLastWriteTimeUtc(dll).Should().Be(dllTime);
+
+        File.AppendAllText(Path.Combine(consumer, "Models.cs"), "\n// touch for rediscovery\n");
+        var afterTouch = _feed.Dotnet(consumer, "build -v:n --nologo");
+        afterTouch.ExitCode.Should().Be(0, because: afterTouch.Output);
+        afterTouch.Output.Should().NotContain(skipGenerate, because: afterTouch.Output);
+    }
+
+    [Fact]
+    public void Transitive_dependent_without_context_skips_generation_on_second_build()
+    {
+        var root = _feed.CreateConsumer("ConsumerGraph");
+        var lib = Path.Combine(root, "Lib");
+        var app = Path.Combine(root, "App");
+        Directory.CreateDirectory(lib);
+        Directory.CreateDirectory(app);
+
+        File.WriteAllText(
+            Path.Combine(lib, "Lib.csproj"),
+            $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net11.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="MinimalSerializers.Json" Version="{_feed.PackageVersion}" />
+              </ItemGroup>
+            </Project>
+            """
+        );
+        WriteModelsAndProgram(
+            lib,
+            models: """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Lib;
+
+            [DataContract]
+            public sealed class FooDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class LibJsonContext : JsonSerializerContext;
+            """,
+            program: """
+            namespace Lib;
+            public static class LibMarker
+            {
+                public static string Ok => "lib";
+            }
+            """
+        );
+
+        File.WriteAllText(
+            Path.Combine(app, "App.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net11.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="..\Lib\Lib.csproj" />
+              </ItemGroup>
+            </Project>
+            """
+        );
+        File.WriteAllText(
+            Path.Combine(app, "Program.cs"),
+            """
+            using Lib;
+            Console.WriteLine(LibMarker.Ok);
+            """
+        );
+
+        var build1 = _feed.Dotnet(app, "build --nologo");
+        build1.ExitCode.Should().Be(0, because: build1.Output);
+
+        var libStamp = Directory
+            .GetFiles(lib, "stamp.minimaljson", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var appStamps = Directory.GetFiles(app, "stamp.minimaljson", SearchOption.AllDirectories);
+        var libDll = Directory
+            .GetFiles(Path.Combine(lib, "bin"), "Lib.dll", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var appDll = Directory
+            .GetFiles(Path.Combine(app, "bin"), "App.dll", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        var libStampTime = File.GetLastWriteTimeUtc(libStamp);
+        var libDllTime = File.GetLastWriteTimeUtc(libDll);
+        var appDllTime = File.GetLastWriteTimeUtc(appDll);
+        var appStampTimes = appStamps
+            .Select(p => (p, t: File.GetLastWriteTimeUtc(p)))
+            .ToArray();
+
+        var incremental = _feed.Dotnet(app, "build -v:n --nologo");
+        incremental.ExitCode.Should().Be(0, because: incremental.Output);
+        incremental
+            .Output.Should()
+            .Contain(
+                "Skipping target \"MinimalJson_GenerateContexts\" because all output files are up-to-date",
+                because: incremental.Output
+            );
+        incremental
+            .Output.Should()
+            .Contain(
+                "Skipping target \"CoreCompile\" because all output files are up-to-date",
+                because: incremental.Output
+            );
+
+        File.GetLastWriteTimeUtc(libStamp).Should().Be(libStampTime);
+        File.GetLastWriteTimeUtc(libDll).Should().Be(libDllTime);
+        File.GetLastWriteTimeUtc(appDll).Should().Be(appDllTime);
+        foreach (var (path, time) in appStampTimes)
+        {
+            File.GetLastWriteTimeUtc(path).Should().Be(time, because: path);
+        }
+    }
+
     private static void WriteModelsAndProgram(string consumer, string models, string program)
     {
         File.WriteAllText(Path.Combine(consumer, "Models.cs"), models);
@@ -419,7 +625,7 @@ public sealed class PackageFeedFixture : IDisposable
         );
         var taskDll = Path.Combine(
             RepoRoot,
-            "src/MinimalSerializers.Json.Tasks/bin/Release/net8.0/MinimalSerializers.Json.Tasks.dll"
+            "src/MinimalSerializers.Json.Tasks/bin/Release/net10.0/MinimalSerializers.Json.Tasks.dll"
         );
         var noBuild = File.Exists(taskDll) ? " --no-build" : string.Empty;
         var pack = Dotnet(

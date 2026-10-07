@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.0.7
+
+- Incremental builds skip discovery when sources and references are unchanged. Target Outputs no longer use a `**` glob (MSBuild treats that as a missing file, so generation ran every build). Generated files are always recorded in `FileWrites` so IncrementalClean cannot delete them when generation is skipped, which previously forced dependents to rebuild.
+- Baseline is .NET 10+. The package targets `net10.0` and `net11.0`; the MSBuild task host is `net10.0`. .NET 8 and .NET 9 TFMs are dropped.
+
 ## 1.0.6
 
 - Do not emit `[JsonSerializable]` roots for `JsonElement`, `JsonDocument`, `JsonValueKind`, or `System.Text.Json.Nodes.*`. STJ already converts those types; registering them as source-gen roots never completes CoreCompile.
