@@ -720,4 +720,73 @@ public sealed class RootCollectorTests
         names.Should().NotContain(r => r.Contains("NodeB"));
         names.Should().NotContain(r => r.Contains("Stream"));
     }
+
+    [Fact]
+    public void Nested_poco_public_stream_field_does_not_omit_parent()
+    {
+        const string source = """
+            using System.IO;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            public sealed class Wrapper
+            {
+                public Stream Content;
+            }
+
+            [DataContract]
+            public sealed class EnvelopeDto
+            {
+                [DataMember]
+                public Wrapper Value { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        var names = JsonSerializableRootCollector
+            .Collect(compilation)
+            .Contexts[0]
+            .RootTypeDisplayNames;
+        names.Should().Contain(r => r.Contains("EnvelopeDto"));
+        names.Should().NotContain(r => r.Contains("Stream"));
+    }
+
+    [Fact]
+    public void Application_type_named_Stream_does_not_omit_parent()
+    {
+        const string source = """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            public sealed class Stream
+            {
+                public string Name { get; init; }
+            }
+
+            [DataContract]
+            public sealed class EnvelopeDto
+            {
+                [DataMember]
+                public Stream Value { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        var names = JsonSerializableRootCollector
+            .Collect(compilation)
+            .Contexts[0]
+            .RootTypeDisplayNames;
+        names.Should().Contain(r => r.Contains("EnvelopeDto"));
+        names.Should().Contain(r => r.Contains("Tests.Stream"));
+    }
 }

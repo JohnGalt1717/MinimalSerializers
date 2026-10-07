@@ -1064,7 +1064,11 @@ public static class JsonSerializableRootCollector
             return true;
         }
 
-        return IsNonJsonFrameworkTypeName(type.Name);
+        return IsNonJsonFrameworkTypeName(
+            type.Name,
+            type.ContainingNamespace?.ToDisplayString(),
+            requireNamespace: type is not IErrorTypeSymbol
+        );
     }
 
     /// <summary>
@@ -1079,15 +1083,19 @@ public static class JsonSerializableRootCollector
         INamedTypeSymbol? ignoreDataMemberAttr,
         INamedTypeSymbol? jsonIgnoreAttr,
         Dictionary<ITypeSymbol, bool> cache
-    ) =>
-        ContainsNonJsonFrameworkGraph(
+    )
+    {
+        var cycleInSubtree = false;
+        return ContainsNonJsonFrameworkGraph(
             type,
             dataContractAttr,
             ignoreDataMemberAttr,
             jsonIgnoreAttr,
             cache,
-            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default),
+            ref cycleInSubtree
         );
+    }
 
     private static bool ContainsNonJsonFrameworkGraph(
         ITypeSymbol type,
@@ -1095,7 +1103,8 @@ public static class JsonSerializableRootCollector
         INamedTypeSymbol? ignoreDataMemberAttr,
         INamedTypeSymbol? jsonIgnoreAttr,
         Dictionary<ITypeSymbol, bool> cache,
-        HashSet<ITypeSymbol> visiting
+        HashSet<ITypeSymbol> visiting,
+        ref bool cycleInSubtree
     )
     {
         type = UnwrapNullable(type) ?? type;
@@ -1107,6 +1116,7 @@ public static class JsonSerializableRootCollector
 
         if (!visiting.Add(type))
         {
+            cycleInSubtree = true;
             return false;
         }
 
@@ -1116,15 +1126,16 @@ public static class JsonSerializableRootCollector
             ignoreDataMemberAttr,
             jsonIgnoreAttr,
             cache,
-            visiting
+            visiting,
+            ref cycleInSubtree
         );
 
         visiting.Remove(type);
 
-        // Do not memoize "safe" while an ancestor is still in progress: a later
-        // Stream member on that ancestor would otherwise leave a cyclic peer cached
-        // as safe.
-        if (poison || visiting.Count == 0)
+        // Cache poison immediately. Cache "safe" when this subtree had no cycle, or
+        // when this is the outermost frame (no in-progress ancestor can still turn
+        // poison). Cyclic peers stay uncached until that ancestor finishes.
+        if (poison || visiting.Count == 0 || !cycleInSubtree)
         {
             cache[type] = poison;
         }
@@ -1138,7 +1149,8 @@ public static class JsonSerializableRootCollector
         INamedTypeSymbol? ignoreDataMemberAttr,
         INamedTypeSymbol? jsonIgnoreAttr,
         Dictionary<ITypeSymbol, bool> cache,
-        HashSet<ITypeSymbol> visiting
+        HashSet<ITypeSymbol> visiting,
+        ref bool cycleInSubtree
     )
     {
         if (type is IErrorTypeSymbol)
@@ -1159,7 +1171,8 @@ public static class JsonSerializableRootCollector
                 ignoreDataMemberAttr,
                 jsonIgnoreAttr,
                 cache,
-                visiting
+                visiting,
+                ref cycleInSubtree
             );
         }
 
@@ -1189,7 +1202,8 @@ public static class JsonSerializableRootCollector
                 jsonIgnoreAttr,
                 includeNonPublic: true,
                 cache,
-                visiting
+                visiting,
+                ref cycleInSubtree
             )
         )
         {
@@ -1204,7 +1218,8 @@ public static class JsonSerializableRootCollector
                 ignoreDataMemberAttr,
                 jsonIgnoreAttr,
                 cache,
-                visiting
+                visiting,
+                ref cycleInSubtree
             );
         }
 
@@ -1216,7 +1231,8 @@ public static class JsonSerializableRootCollector
                     ignoreDataMemberAttr,
                     jsonIgnoreAttr,
                     cache,
-                    visiting
+                    visiting,
+                    ref cycleInSubtree
                 )
                 || ContainsNonJsonFrameworkGraph(
                     value,
@@ -1224,7 +1240,8 @@ public static class JsonSerializableRootCollector
                     ignoreDataMemberAttr,
                     jsonIgnoreAttr,
                     cache,
-                    visiting
+                    visiting,
+                    ref cycleInSubtree
                 );
         }
 
@@ -1236,7 +1253,8 @@ public static class JsonSerializableRootCollector
                 jsonIgnoreAttr,
                 includeNonPublic: false,
                 cache,
-                visiting
+                visiting,
+                ref cycleInSubtree
             );
     }
 
@@ -1247,7 +1265,8 @@ public static class JsonSerializableRootCollector
         INamedTypeSymbol? jsonIgnoreAttr,
         bool includeNonPublic,
         Dictionary<ITypeSymbol, bool> cache,
-        HashSet<ITypeSymbol> visiting
+        HashSet<ITypeSymbol> visiting,
+        ref bool cycleInSubtree
     )
     {
         foreach (var member in named.GetMembers())
@@ -1277,9 +1296,9 @@ public static class JsonSerializableRootCollector
                             p.DeclaredAccessibility == Accessibility.Public
                             && p.GetMethod is not null
                         ) => p.Type,
-                IFieldSymbol f
-                    when includeNonPublic || f.DeclaredAccessibility == Accessibility.Public =>
-                    f.Type,
+                // STJ does not serialize fields unless IncludeFields / [JsonInclude].
+                // DataContract graphs still walk fields (DataMember can be on a field).
+                IFieldSymbol f when includeNonPublic => f.Type,
                 _ => null,
             };
             if (memberType is null)
@@ -1294,7 +1313,8 @@ public static class JsonSerializableRootCollector
                     ignoreDataMemberAttr,
                     jsonIgnoreAttr,
                     cache,
-                    visiting
+                    visiting,
+                    ref cycleInSubtree
                 )
             )
             {
@@ -1307,7 +1327,7 @@ public static class JsonSerializableRootCollector
 
     private static bool IsNonJsonFrameworkType(ITypeSymbol type)
     {
-        if (IsNonJsonFrameworkTypeName(type.Name))
+        if (IsNonJsonFrameworkType(type, requireNamespace: type is not IErrorTypeSymbol))
         {
             return true;
         }
@@ -1319,7 +1339,7 @@ public static class JsonSerializableRootCollector
 
         for (var current = type.BaseType; current is not null; current = current.BaseType)
         {
-            if (IsNonJsonFrameworkTypeName(current.Name))
+            if (IsNonJsonFrameworkType(current, requireNamespace: true))
             {
                 return true;
             }
@@ -1329,7 +1349,7 @@ public static class JsonSerializableRootCollector
         {
             foreach (var iface in named.AllInterfaces)
             {
-                if (IsNonJsonFrameworkTypeName(iface.Name))
+                if (IsNonJsonFrameworkType(iface, requireNamespace: true))
                 {
                     return true;
                 }
@@ -1339,18 +1359,43 @@ public static class JsonSerializableRootCollector
         return false;
     }
 
+    private static bool IsNonJsonFrameworkType(ITypeSymbol type, bool requireNamespace) =>
+        IsNonJsonFrameworkTypeName(
+            type.Name,
+            type.ContainingNamespace?.ToDisplayString(),
+            requireNamespace
+        );
+
     private static bool IsNonJsonFrameworkTypeName(string name) =>
-        name
-            is "IFormFile"
-                or "IFormFileCollection"
-                or "FormFile"
-                or "FormFileCollection"
-                or "Stream"
-                or "PipeReader"
-                or "PipeWriter"
-                or "HttpContext"
-                or "HttpRequest"
-                or "HttpResponse";
+        IsNonJsonFrameworkTypeName(name, ns: null, requireNamespace: false);
+
+    private static bool IsNonJsonFrameworkTypeName(string name, string? ns, bool requireNamespace)
+    {
+        var expected = name switch
+        {
+            "IFormFile"
+            or "IFormFileCollection"
+            or "FormFile"
+            or "FormFileCollection"
+            or "HttpContext"
+            or "HttpRequest"
+            or "HttpResponse" => "Microsoft.AspNetCore.Http",
+            "Stream" => "System.IO",
+            "PipeReader" or "PipeWriter" => "System.IO.Pipelines",
+            _ => null,
+        };
+        if (expected is null)
+        {
+            return false;
+        }
+
+        if (!requireNamespace || string.IsNullOrEmpty(ns))
+        {
+            return true;
+        }
+
+        return ns == expected || ns.StartsWith(expected + ".", StringComparison.Ordinal);
+    }
 
     private static void WalkMembers(
         INamedTypeSymbol type,
