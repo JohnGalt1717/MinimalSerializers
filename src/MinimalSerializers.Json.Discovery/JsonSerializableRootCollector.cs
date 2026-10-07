@@ -127,7 +127,8 @@ public static class JsonSerializableRootCollector
                     isPartial,
                     derives,
                     roots,
-                    ctxDiagnostics.ToImmutable()
+                    ctxDiagnostics.ToImmutable(),
+                    emitMetadataGenerationMode: !HasJsonSourceGenerationOptions(context)
                 )
             );
         }
@@ -194,6 +195,174 @@ public static class JsonSerializableRootCollector
         return false;
     }
 
+    private static bool HasJsonSourceGenerationOptions(INamedTypeSymbol symbol)
+    {
+        foreach (var attribute in symbol.GetAttributes())
+        {
+            var name = attribute.AttributeClass?.Name;
+            if (name is "JsonSourceGenerationOptionsAttribute" or "JsonSourceGenerationOptions")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void TryRegisterErrorTypeCollection(
+        IErrorTypeSymbol error,
+        DiscoveryOptions options,
+        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
+        INamedTypeSymbol? dataContractAttr,
+        INamedTypeSymbol? ignoreDataMemberAttr,
+        INamedTypeSymbol? jsonIgnoreAttr,
+        Dictionary<ITypeSymbol, bool> poisonCache,
+        Action<ITypeSymbol?> enqueue
+    )
+    {
+        if (error.TypeArguments.Length == 1 && IsKnownCollectionTypeName(error.Name))
+        {
+            var element = StripNrt(error.TypeArguments[0]);
+            if (
+                ContainsNonJsonFrameworkGraph(
+                    element,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    poisonCache
+                )
+            )
+            {
+                return;
+            }
+
+            var include =
+                error.Name == "List"
+                    ? options.IncludeList
+                    : options.IncludeDeclaredCollectionInterfaces;
+            if (include)
+            {
+                var display =
+                    "global::System.Collections.Generic."
+                    + error.Name
+                    + "<"
+                    + TypeDisplayNameFormatter.ToGlobalDisplayString(element)
+                    + ">";
+                var prefix = error.Name == "List" ? "ListOf" : "CollectionOf";
+                AddRoot(
+                    rootsByDisplay,
+                    new DiscoveredRoot(
+                        display,
+                        TypeDisplayNameFormatter.ToTypeInfoPropertyNameFromDisplay(prefix, display)
+                    )
+                );
+            }
+
+            enqueue(element);
+            return;
+        }
+
+        if (error.TypeArguments.Length == 2 && IsKnownDictionaryTypeName(error.Name))
+        {
+            var key = StripNrt(error.TypeArguments[0]);
+            var value = StripNrt(error.TypeArguments[1]);
+            if (
+                ContainsNonJsonFrameworkGraph(
+                    key,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    poisonCache
+                )
+                || ContainsNonJsonFrameworkGraph(
+                    value,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    poisonCache
+                )
+            )
+            {
+                return;
+            }
+
+            if (options.IncludeDictionaries)
+            {
+                var display =
+                    "global::System.Collections.Generic."
+                    + error.Name
+                    + "<"
+                    + TypeDisplayNameFormatter.ToGlobalDisplayString(key)
+                    + ", "
+                    + TypeDisplayNameFormatter.ToGlobalDisplayString(value)
+                    + ">";
+                AddRoot(
+                    rootsByDisplay,
+                    new DiscoveredRoot(
+                        display,
+                        TypeDisplayNameFormatter.ToTypeInfoPropertyNameFromDisplay(
+                            "DictionaryOf",
+                            display
+                        )
+                    )
+                );
+            }
+
+            enqueue(key);
+            enqueue(value);
+        }
+    }
+
+    private static bool IsKnownCollectionTypeName(string name) =>
+        name
+            is "List"
+                or "IList"
+                or "ICollection"
+                or "IEnumerable"
+                or "IReadOnlyList"
+                or "IReadOnlyCollection"
+                or "ISet"
+                or "HashSet"
+                or "IReadOnlySet"
+                or "ImmutableArray"
+                or "ImmutableList";
+
+    private static bool IsKnownDictionaryTypeName(string name) =>
+        name is "Dictionary" or "IDictionary" or "IReadOnlyDictionary" or "ImmutableDictionary";
+
+    private static bool IsKnownCollectionDefinition(INamedTypeSymbol definition)
+    {
+        var name = definition.Name;
+        var ns = definition.ContainingNamespace?.ToDisplayString();
+        if (ns is "System.Collections.Generic")
+        {
+            return name
+                is "List"
+                    or "IList"
+                    or "ICollection"
+                    or "IEnumerable"
+                    or "IReadOnlyList"
+                    or "IReadOnlyCollection"
+                    or "ISet"
+                    or "HashSet"
+                    or "IReadOnlySet";
+        }
+
+        return ns is "System.Collections.Immutable" && name is "ImmutableArray" or "ImmutableList";
+    }
+
+    private static bool IsKnownDictionaryDefinition(INamedTypeSymbol definition)
+    {
+        var name = definition.Name;
+        var ns = definition.ContainingNamespace?.ToDisplayString();
+        if (ns is "System.Collections.Generic")
+        {
+            return name is "Dictionary" or "IDictionary" or "IReadOnlyDictionary";
+        }
+
+        return ns is "System.Collections.Immutable" && name is "ImmutableDictionary";
+    }
+
     private static ImmutableArray<DiscoveredRoot> CollectRoots(
         Compilation compilation,
         DiscoveryOptions options,
@@ -212,6 +381,7 @@ public static class JsonSerializableRootCollector
         var genericInheritanceWarned = new HashSet<INamedTypeSymbol>(
             SymbolEqualityComparer.Default
         );
+        var poisonCache = new Dictionary<ITypeSymbol, bool>(SymbolEqualityComparer.Default);
 
         foreach (var type in GetAllNamedTypes(compilation.Assembly.GlobalNamespace))
         {
@@ -261,10 +431,20 @@ public static class JsonSerializableRootCollector
                 continue;
             }
 
-            if (current is IErrorTypeSymbol)
+            if (current is IErrorTypeSymbol error)
             {
-                // Common when task compilation lacks a full reference set for BCL primitives.
-                // STJ still serializes primitives on object graphs; skip quietly.
+                // Duplicate BCL refs or missing ImplicitUsings make List<T> ErrorType.
+                // Still register known collection shapes from the parsed generic name.
+                TryRegisterErrorTypeCollection(
+                    error,
+                    options,
+                    rootsByDisplay,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    poisonCache,
+                    Enqueue
+                );
                 continue;
             }
 
@@ -283,16 +463,45 @@ public static class JsonSerializableRootCollector
 
             switch (current)
             {
+                case INamedTypeSymbol primitive when IsPrimitiveLike(primitive):
+                    continue;
                 case IArrayTypeSymbol array:
-                    AddArrayRoot(
-                        rootsByDisplay,
-                        array,
-                        mangle: !IsPrimitiveLike(array.ElementType)
-                    );
+                    if (
+                        ContainsNonJsonFrameworkGraph(
+                            array,
+                            dataContractAttr,
+                            ignoreDataMemberAttr,
+                            jsonIgnoreAttr,
+                            poisonCache
+                        )
+                    )
+                    {
+                        continue;
+                    }
+                    if (options.IncludeArrays)
+                    {
+                        AddArrayRoot(
+                            rootsByDisplay,
+                            array,
+                            mangle: !IsPrimitiveLike(array.ElementType)
+                        );
+                    }
                     Enqueue(array.ElementType);
                     continue;
                 case INamedTypeSymbol named
                     when IsSupportedDictionary(named, out var key, out var value):
+                    if (
+                        ContainsNonJsonFrameworkGraph(
+                            named,
+                            dataContractAttr,
+                            ignoreDataMemberAttr,
+                            jsonIgnoreAttr,
+                            poisonCache
+                        )
+                    )
+                    {
+                        continue;
+                    }
                     if (options.IncludeDictionaries)
                     {
                         AddCollectionLikeRoot(rootsByDisplay, named, "DictionaryOf");
@@ -301,12 +510,24 @@ public static class JsonSerializableRootCollector
                     Enqueue(value);
                     continue;
                 case INamedTypeSymbol named when IsSupportedCollection(named, out var element):
-                    if (options.IncludeDeclaredCollectionInterfaces)
-                    {
-                        if (
-                            named.OriginalDefinition.ToDisplayString()
-                            == "System.Collections.Generic.List<T>"
+                    if (
+                        ContainsNonJsonFrameworkGraph(
+                            named,
+                            dataContractAttr,
+                            ignoreDataMemberAttr,
+                            jsonIgnoreAttr,
+                            poisonCache
                         )
+                    )
+                    {
+                        continue;
+                    }
+                    if (
+                        named.OriginalDefinition.Name == "List"
+                        && IsKnownCollectionDefinition(named.OriginalDefinition)
+                    )
+                    {
+                        if (options.IncludeList)
                         {
                             AddRoot(
                                 rootsByDisplay,
@@ -319,14 +540,29 @@ public static class JsonSerializableRootCollector
                                 )
                             );
                         }
-                        else
-                        {
-                            AddCollectionLikeRoot(rootsByDisplay, named, "CollectionOf");
-                        }
+                    }
+                    else if (options.IncludeDeclaredCollectionInterfaces)
+                    {
+                        AddCollectionLikeRoot(rootsByDisplay, named, "CollectionOf");
                     }
                     Enqueue(element);
                     continue;
                 case INamedTypeSymbol named:
+                    // Multipart DTOs (IFormFile members) are form-bound, not JSON.
+                    // Rooting them makes STJ expand HttpContext and never complete.
+                    if (
+                        ContainsNonJsonFrameworkGraph(
+                            named,
+                            dataContractAttr,
+                            ignoreDataMemberAttr,
+                            jsonIgnoreAttr,
+                            poisonCache
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
                     if (named.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Enum)
                     {
                         RegisterObjectOrEnum(
@@ -461,28 +697,21 @@ public static class JsonSerializableRootCollector
             genericInheritanceWarned
         );
 
+        // Abstract DataContracts are bases (QueryRequestDto<T>, chart DTOs). Rooting
+        // the closed generic base alongside a concrete derived type hangs STJ.
+        if (type.IsAbstract)
+        {
+            return;
+        }
+
         // Plain object/enum roots keep STJ default names unless a later collision forces a rename.
+        // Do not also emit T[] / List<T> for every object — that triples STJ roots and
+        // makes CoreCompile never finish on large graphs. Collection shapes are
+        // registered when they appear as members.
         AddRoot(
             rootsByDisplay,
             new DiscoveredRoot(TypeDisplayNameFormatter.ToGlobalDisplayString(type))
         );
-
-        if (options.IncludeArrays)
-        {
-            AddArrayRootForElement(rootsByDisplay, type);
-        }
-
-        if (options.IncludeList)
-        {
-            var listDisplay = TypeDisplayNameFormatter.ToListDisplayString(type);
-            AddRoot(
-                rootsByDisplay,
-                new DiscoveredRoot(
-                    listDisplay,
-                    TypeDisplayNameFormatter.ToTypeInfoPropertyName("ListOf", type)
-                )
-            );
-        }
     }
 
     /// <summary>
@@ -620,19 +849,6 @@ public static class JsonSerializableRootCollector
         string? name = mangle
             ? TypeDisplayNameFormatter.ToTypeInfoPropertyName("ArrayOf", array.ElementType)
             : null;
-        AddRoot(rootsByDisplay, new DiscoveredRoot(display, name));
-    }
-
-    private static void AddArrayRootForElement(
-        SortedDictionary<string, DiscoveredRoot> rootsByDisplay,
-        ITypeSymbol elementType
-    )
-    {
-        var display = TypeDisplayNameFormatter.ToArrayDisplayString(elementType);
-        // Object/enum arrays always get a unique name; primitives (byte[], int[], ...) keep STJ defaults.
-        string? name = IsPrimitiveLike(elementType)
-            ? null
-            : TypeDisplayNameFormatter.ToTypeInfoPropertyName("ArrayOf", elementType);
         AddRoot(rootsByDisplay, new DiscoveredRoot(display, name));
     }
 
@@ -813,7 +1029,8 @@ public static class JsonSerializableRootCollector
         }
 
         var display = type.ToDisplayString();
-        return display
+        if (
+            display
             is "System.Guid"
                 or "System.DateTime"
                 or "System.DateTimeOffset"
@@ -823,7 +1040,219 @@ public static class JsonSerializableRootCollector
                 or "System.Uri"
                 or "System.Version"
                 or "System.Decimal"
-                or "decimal";
+                or "decimal"
+                or "System.Text.Json.JsonElement"
+                or "System.Text.Json.JsonDocument"
+                or "System.Text.Json.JsonValueKind"
+        )
+        {
+            return true;
+        }
+
+        var ns = type.ContainingNamespace?.ToDisplayString();
+        if (ns is "System.Text.Json.Nodes")
+        {
+            return true;
+        }
+
+        // Multipart / runtime types. STJ source-gen walking IFormFile/Stream
+        // pulls HttpContext and never completes. Not JSON wire types.
+        if (
+            ns
+            is "Microsoft.AspNetCore.Http"
+                or "Microsoft.AspNetCore.Http.Features"
+                or "System.IO"
+                or "System.IO.Pipelines"
+        )
+        {
+            return true;
+        }
+
+        return type.Name
+            is "IFormFile"
+                or "IFormFileCollection"
+                or "FormFile"
+                or "FormFileCollection"
+                or "Stream"
+                or "PipeReader"
+                or "PipeWriter";
+    }
+
+    /// <summary>
+    /// True when this type's JSON graph would pull multipart/runtime types
+    /// (<c>IFormFile</c>, <c>Stream</c>, …). Those graphs make STJ source-gen
+    /// never complete; omit the whole type as a JSON root. No consumer
+    /// <c>[JsonIgnore]</c> or csproj flag is required.
+    /// </summary>
+    private static bool ContainsNonJsonFrameworkGraph(
+        ITypeSymbol type,
+        INamedTypeSymbol? dataContractAttr,
+        INamedTypeSymbol? ignoreDataMemberAttr,
+        INamedTypeSymbol? jsonIgnoreAttr,
+        Dictionary<ITypeSymbol, bool> cache
+    )
+    {
+        type = UnwrapNullable(type) ?? type;
+
+        if (cache.TryGetValue(type, out var cached))
+        {
+            return cached;
+        }
+
+        if (type is IErrorTypeSymbol)
+        {
+            var poison = IsNonJsonFrameworkType(type);
+            cache[type] = poison;
+            return poison;
+        }
+
+        if (IsNonJsonFrameworkType(type))
+        {
+            cache[type] = true;
+            return true;
+        }
+
+        if (type is IArrayTypeSymbol array)
+        {
+            var poison = ContainsNonJsonFrameworkGraph(
+                array.ElementType,
+                dataContractAttr,
+                ignoreDataMemberAttr,
+                jsonIgnoreAttr,
+                cache
+            );
+            cache[type] = poison;
+            return poison;
+        }
+
+        if (type is not INamedTypeSymbol named)
+        {
+            cache[type] = false;
+            return false;
+        }
+
+        if (IsPrimitiveLike(named) || named.TypeKind == TypeKind.Enum)
+        {
+            cache[type] = false;
+            return false;
+        }
+
+        // Cycle guard before walking members or collection elements.
+        cache[type] = false;
+
+        if (HasNamedAttribute(named, dataContractAttr, "DataContractAttribute", "DataContract"))
+        {
+            foreach (var member in named.GetMembers())
+            {
+                if (member.IsStatic)
+                {
+                    continue;
+                }
+
+                if (
+                    HasNamedAttribute(
+                        member,
+                        ignoreDataMemberAttr,
+                        "IgnoreDataMemberAttribute",
+                        "IgnoreDataMember"
+                    )
+                    || HasNamedAttribute(
+                        member,
+                        jsonIgnoreAttr,
+                        "JsonIgnoreAttribute",
+                        "JsonIgnore"
+                    )
+                )
+                {
+                    continue;
+                }
+
+                ITypeSymbol? memberType = member switch
+                {
+                    IPropertySymbol p => p.Type,
+                    IFieldSymbol f => f.Type,
+                    _ => null,
+                };
+                if (memberType is null)
+                {
+                    continue;
+                }
+
+                if (
+                    ContainsNonJsonFrameworkGraph(
+                        memberType,
+                        dataContractAttr,
+                        ignoreDataMemberAttr,
+                        jsonIgnoreAttr,
+                        cache
+                    )
+                )
+                {
+                    cache[type] = true;
+                    return true;
+                }
+            }
+        }
+
+        if (IsSupportedCollection(named, out var element))
+        {
+            var poison = ContainsNonJsonFrameworkGraph(
+                element,
+                dataContractAttr,
+                ignoreDataMemberAttr,
+                jsonIgnoreAttr,
+                cache
+            );
+            cache[type] = poison;
+            return poison;
+        }
+
+        if (IsSupportedDictionary(named, out var key, out var value))
+        {
+            var poison =
+                ContainsNonJsonFrameworkGraph(
+                    key,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    cache
+                )
+                || ContainsNonJsonFrameworkGraph(
+                    value,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    cache
+                );
+            cache[type] = poison;
+            return poison;
+        }
+
+        return false;
+    }
+
+    private static bool IsNonJsonFrameworkType(ITypeSymbol type)
+    {
+        var ns = type.ContainingNamespace?.ToDisplayString();
+        if (
+            ns
+            is "Microsoft.AspNetCore.Http"
+                or "Microsoft.AspNetCore.Http.Features"
+                or "System.IO"
+                or "System.IO.Pipelines"
+        )
+        {
+            return true;
+        }
+
+        return type.Name
+            is "IFormFile"
+                or "IFormFileCollection"
+                or "FormFile"
+                or "FormFileCollection"
+                or "Stream"
+                or "PipeReader"
+                or "PipeWriter";
     }
 
     private static void WalkMembers(
@@ -927,6 +1356,11 @@ public static class JsonSerializableRootCollector
     private static bool IsSupportedCollection(INamedTypeSymbol named, out ITypeSymbol element)
     {
         element = null!;
+        if (named is IErrorTypeSymbol)
+        {
+            return false;
+        }
+
         if (!named.IsGenericType || named.TypeArguments.Length != 1)
         {
             // IEnumerable without T is not useful
@@ -944,21 +1378,7 @@ public static class JsonSerializableRootCollector
             return false;
         }
 
-        var def = named.OriginalDefinition.ToDisplayString();
-        if (
-            def
-            is "System.Collections.Generic.List<T>"
-                or "System.Collections.Generic.IList<T>"
-                or "System.Collections.Generic.ICollection<T>"
-                or "System.Collections.Generic.IEnumerable<T>"
-                or "System.Collections.Generic.IReadOnlyList<T>"
-                or "System.Collections.Generic.IReadOnlyCollection<T>"
-                or "System.Collections.Generic.ISet<T>"
-                or "System.Collections.Generic.HashSet<T>"
-                or "System.Collections.Generic.IReadOnlySet<T>"
-                or "System.Collections.Immutable.ImmutableArray<T>"
-                or "System.Collections.Immutable.ImmutableList<T>"
-        )
+        if (IsKnownCollectionDefinition(named.OriginalDefinition))
         {
             element = named.TypeArguments[0];
             return true;
@@ -989,19 +1409,17 @@ public static class JsonSerializableRootCollector
     {
         key = null!;
         value = null!;
+        if (named is IErrorTypeSymbol)
+        {
+            return false;
+        }
+
         if (!named.IsGenericType || named.TypeArguments.Length != 2)
         {
             return false;
         }
 
-        var def = named.OriginalDefinition.ToDisplayString();
-        if (
-            def
-            is "System.Collections.Generic.Dictionary<TKey, TValue>"
-                or "System.Collections.Generic.IDictionary<TKey, TValue>"
-                or "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>"
-                or "System.Collections.Immutable.ImmutableDictionary<TKey, TValue>"
-        )
+        if (IsKnownDictionaryDefinition(named.OriginalDefinition))
         {
             key = named.TypeArguments[0];
             value = named.TypeArguments[1];
@@ -1010,12 +1428,9 @@ public static class JsonSerializableRootCollector
 
         foreach (var iface in named.AllInterfaces)
         {
-            var ifaceDef = iface.OriginalDefinition.ToDisplayString();
             if (
-                ifaceDef
-                    is "System.Collections.Generic.IDictionary<TKey, TValue>"
-                        or "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>"
-                && iface.TypeArguments.Length == 2
+                iface.TypeArguments.Length == 2
+                && IsKnownDictionaryDefinition(iface.OriginalDefinition)
             )
             {
                 key = iface.TypeArguments[0];
@@ -1026,6 +1441,9 @@ public static class JsonSerializableRootCollector
 
         return false;
     }
+
+    private static ITypeSymbol StripNrt(ITypeSymbol type) =>
+        type.WithNullableAnnotation(NullableAnnotation.None);
 
     private static ITypeSymbol UnwrapNullable(ITypeSymbol type)
     {
@@ -1045,9 +1463,21 @@ public static class JsonSerializableRootCollector
         return type.WithNullableAnnotation(NullableAnnotation.None);
     }
 
+    private static ImmutableArray<AttributeData> TryGetAttributes(ISymbol symbol)
+    {
+        try
+        {
+            return symbol.GetAttributes();
+        }
+        catch (NullReferenceException)
+        {
+            // Mixed task-host / consumer BCL refs can NRE inside AttributeUsage decode.
+            return ImmutableArray<AttributeData>.Empty;
+        }
+    }
+
     private static bool HasAttribute(ISymbol symbol, INamedTypeSymbol attributeType) =>
-        symbol
-            .GetAttributes()
+        TryGetAttributes(symbol)
             .Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, attributeType));
 
     private static bool HasNamedAttribute(
@@ -1061,7 +1491,7 @@ public static class JsonSerializableRootCollector
             return true;
         }
 
-        foreach (var attribute in symbol.GetAttributes())
+        foreach (var attribute in TryGetAttributes(symbol))
         {
             var simpleName = attribute.AttributeClass?.Name;
             if (simpleName is not null && names.Contains(simpleName, StringComparer.Ordinal))

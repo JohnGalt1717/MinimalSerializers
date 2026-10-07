@@ -84,26 +84,161 @@ public sealed class RootCollectorTests
         roots
             .Should()
             .Contain(r => r.Contains("ParentDto") && !r.Contains("List") && !r.EndsWith("[]"));
-        roots.Should().Contain(r => r.Contains("ParentDto[]"));
-        roots.Should().Contain(r => r.Contains("List<") && r.Contains("ParentDto"));
+        roots.Should().NotContain(r => r.Contains("ParentDto[]"));
+        roots.Should().NotContain(r => r.Contains("List<") && r.Contains("ParentDto"));
         roots.Should().Contain(r => r.Contains("ChildDto"));
+        roots.Should().Contain(r => r.Contains("List<") && r.Contains("ChildDto"));
         roots.Should().Contain(r => r.Contains("Status"));
         roots.Should().Contain(r => r.Contains("Dictionary"));
+        roots.Should().Contain(r => r.Contains("IReadOnlyCollection") && r.Contains("string"));
 
-        // Collection wrappers get explicit TypeInfoPropertyName.
+        // Collection wrappers that appear as members get explicit TypeInfoPropertyName.
         ctx.Roots.Should()
             .Contain(r =>
                 r.TypeDisplayName.Contains("List<")
-                && r.TypeDisplayName.Contains("ParentDto")
+                && r.TypeDisplayName.Contains("ChildDto")
                 && r.TypeInfoPropertyName != null
                 && r.TypeInfoPropertyName.StartsWith("ListOf_", StringComparison.Ordinal)
             );
-        ctx.Roots.Should()
-            .Contain(r =>
-                r.TypeDisplayName.EndsWith("ParentDto[]", StringComparison.Ordinal)
-                && r.TypeInfoPropertyName != null
-                && r.TypeInfoPropertyName.StartsWith("ArrayOf_", StringComparison.Ordinal)
-            );
+    }
+
+    [Fact]
+    public void Discovers_list_members_from_global_usings_without_file_using()
+    {
+        const string globalUsings = "global using System.Collections.Generic;";
+        const string source = """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Tests;
+
+            [DataContract]
+            public sealed class ChildDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [DataContract]
+            public sealed class ParentDto
+            {
+                [DataMember]
+                public required List<ChildDto> Children { get; init; }
+
+                [DataMember]
+                public required IReadOnlyList<string> Tags { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class TestJsonContext : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(globalUsings, source);
+        var result = JsonSerializableRootCollector.Collect(compilation);
+        var roots = result.Contexts[0].RootTypeDisplayNames;
+        roots.Should().Contain(r => r.Contains("List<") && r.Contains("ChildDto"));
+        roots.Should().Contain(r => r.Contains("IReadOnlyList") && r.Contains("string"));
+    }
+
+    [Fact]
+    public void Skips_JsonElement_DataMember_and_does_not_emit_JsonValueKind()
+    {
+        const string source = """
+            using System.Runtime.Serialization;
+            using System.Text.Json;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Tests;
+
+            [DataContract]
+            public sealed class EnvelopeDto
+            {
+                [DataMember]
+                public JsonElement? Body { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class TestJsonContext : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        compilation
+            .GetTypeByMetadataName("System.Text.Json.JsonElement")
+            .Should()
+            .NotBeNull("the test compilation must resolve JsonElement");
+        var result = JsonSerializableRootCollector.Collect(compilation);
+
+        result.Contexts.Should().ContainSingle();
+        var names = result.Contexts[0].RootTypeDisplayNames;
+        names
+            .Should()
+            .Contain(r => r.Contains("EnvelopeDto") && !r.Contains("List") && !r.EndsWith("[]"));
+        names.Should().NotContain(r => r.Contains("JsonElement"));
+        names.Should().NotContain(r => r.Contains("JsonValueKind"));
+        names.Should().NotContain(r => r.Contains("JsonDocument"));
+        names.Should().NotContain(r => r.Contains("JsonNode"));
+    }
+
+    [Fact]
+    public void Skips_IFormFile_DataContract_as_json_root()
+    {
+        const string source = """
+            using System.IO;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public interface IFormFile
+                {
+                    string FileName { get; }
+                    Stream OpenReadStream();
+                }
+            }
+
+            namespace Tests
+            {
+                [DataContract]
+                public sealed class OkDto
+                {
+                    [DataMember]
+                    public string Name { get; init; }
+                }
+
+                [DataContract]
+                public sealed class UploadDto
+                {
+                    [DataMember]
+                    public Microsoft.AspNetCore.Http.IFormFile File { get; init; }
+                }
+
+                [DataContract]
+                public sealed class WrapperDto
+                {
+                    [DataMember]
+                    public UploadDto Upload { get; init; }
+                }
+
+                [MinimalJsonSerializerContext]
+                public partial class TestJsonContext : JsonSerializerContext;
+            }
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        var result = JsonSerializableRootCollector.Collect(compilation);
+
+        result.Contexts.Should().ContainSingle();
+        var names = result.Contexts[0].RootTypeDisplayNames;
+        names
+            .Should()
+            .Contain(r => r.Contains("OkDto") && !r.Contains("List") && !r.EndsWith("[]"));
+        names.Should().NotContain(r => r.Contains("UploadDto"));
+        names.Should().NotContain(r => r.Contains("WrapperDto"));
+        names.Should().NotContain(r => r.Contains("IFormFile"));
+        names.Should().NotContain(r => r.Contains("Stream"));
     }
 
     [Fact]
@@ -216,6 +351,7 @@ public sealed class RootCollectorTests
             public sealed record ListMoneyDetailsDto
             {
                 [DataMember] public required MoneyDetailsDto[] Items { get; init; }
+                [DataMember] public required List<MoneyDetailsDto> More { get; init; }
             }
 
             [DataContract]
@@ -245,12 +381,6 @@ public sealed class RootCollectorTests
         );
         listOfMoney.TypeInfoPropertyName.Should().NotBeNullOrEmpty();
         listOfMoney.TypeInfoPropertyName.Should().StartWith("ListOf_");
-
-        var listOfListMoney = ctx.Roots.Single(r =>
-            r.TypeDisplayName.Contains("List<", StringComparison.Ordinal)
-            && r.TypeDisplayName.Contains("ListMoneyDetailsDto", StringComparison.Ordinal)
-        );
-        listOfListMoney.TypeInfoPropertyName.Should().NotBeNullOrEmpty();
 
         // Emitted attributes must use TypeInfoPropertyName for List<> roots.
         var emit = MinimalJsonContextSourceEmitter.Emit(ctx);
