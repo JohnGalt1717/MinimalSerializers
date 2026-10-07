@@ -64,10 +64,10 @@
     <Delete Files="$(MinimalJson_StampFile)" Condition="'@(_MinimalJson_MissingGenerated)' != ''" />
   </Target>
 
-  <!-- @(Compile) timestamps do not change when a globbed file is deleted, and
-       MinimalJsonEmit* / LangVersion can change with no file touch. Fingerprint
-       those identities and option values (write-if-different) so GenerateContexts
-       cannot skip with stale roots. -->
+  <!-- @(Compile)/@(ReferencePath) timestamps do not change when a globbed file or
+       package reference is removed/replaced with an older DLL, and MinimalJsonEmit*
+       / LangVersion can change with no file touch. Fingerprint those identities and
+       option values (write-if-different) so GenerateContexts cannot skip with stale roots. -->
   <Target Name="MinimalJson_WriteInputFingerprint" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
     <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
     <ItemGroup>
@@ -80,7 +80,11 @@
       <_MinimalJson_FingerprintLines Include="EmitDeclaredCollections=$(MinimalJsonEmitDeclaredCollections)" />
       <_MinimalJson_FingerprintLines Include="EmitDictionaries=$(MinimalJsonEmitDictionaries)" />
       <_MinimalJson_FingerprintLines Include="WarnOpenGenerics=$(MinimalJsonWarnOpenGenerics)" />
+      <_MinimalJson_FingerprintLines Include="Task=$(MinimalJson_TaskAssembly)" />
       <_MinimalJson_FingerprintLines Include="@(_MinimalJson_CompileForFingerprint->'Compile=%(FullPath)')" />
+      <_MinimalJson_FingerprintLines Include="@(ReferencePath->'Ref=%(FullPath)')" />
+      <_MinimalJson_FingerprintLines Include="@(ReferencePathWithRefAssemblies->'RefAsm=%(FullPath)')" />
+      <_MinimalJson_FingerprintLines Include="@(RuntimeCopyLocalItems->'CopyLocal=%(FullPath)')" Condition="'@(RuntimeCopyLocalItems)' != ''" />
     </ItemGroup>
     <WriteLinesToFile File="$(MinimalJson_InputsFile)" Lines="@(_MinimalJson_FingerprintLines)" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
   </Target>
@@ -94,7 +98,7 @@
           BeforeTargets="BeforeCompile;CoreCompile"
           DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt;MinimalJson_InvalidateStaleStamp;MinimalJson_WriteInputFingerprint"
           Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''"
-          Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath);$(MinimalJson_TaskAssembly);$(MinimalJson_InputsFile)"
+          Inputs="@(Compile);@(ReferencePath);@(ReferencePathWithRefAssemblies);@(RuntimeCopyLocalItems);$(MSBuildProjectFullPath);$(MinimalJson_TaskAssembly);$(MinimalJson_InputsFile)"
           Outputs="$(MinimalJson_StampFile)">
     <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
     <ItemGroup>

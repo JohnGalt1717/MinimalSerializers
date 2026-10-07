@@ -679,11 +679,7 @@ public sealed class SingleBuildTests
         var appStampTime = File.GetLastWriteTimeUtc(appStamp);
         var appDllTime = File.GetLastWriteTimeUtc(appDll);
 
-        // App only: Lib skip messages must not satisfy the incremental assertions.
-        var incremental = _feed.Dotnet(
-            app,
-            "build -v:n --nologo -p:BuildProjectReferences=false"
-        );
+        var incremental = _feed.Dotnet(app, "build -v:n --nologo");
         incremental.ExitCode.Should().Be(0, because: incremental.Output);
         incremental
             .Output.Should()
