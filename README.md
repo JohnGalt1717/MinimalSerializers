@@ -10,7 +10,7 @@ Stop hand-maintaining hundreds of `[JsonSerializable(typeof(...))]` attributes (
 
 - every DTO
 - every nested type
-- every `List<T>` / `T[]` / dictionary shape used as a root
+- every `List<T>` / `T[]` / dictionary shape that appears as a member
 
 MinimalSerializers.Json fills the gap .NET should have shipped: **discover the graph, emit the roots, reuse STJ**.
 
@@ -23,7 +23,7 @@ MinimalSerializers.Json fills the gap .NET should have shipped: **discover the g
 MSBuild target (buildTransitive) → discovery task
         │
         ▼
-obj/.../*.MinimalJson.g.cs   // [JsonSerializable(typeof(T))] + arrays/lists
+obj/.../*.MinimalJson.g.cs   // [JsonSerializable(typeof(T))] + member arrays/lists
         │
         ▼
 CoreCompile → System.Text.Json source generator
@@ -94,13 +94,11 @@ options.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
 
 ## What gets registered
 
-For each discovered object/enum type `T` (from `[DataContract]` and nested `[DataMember]` graphs):
+For each discovered non-abstract object/enum type `T` (from `[DataContract]` and nested `[DataMember]` graphs):
 
 - `T`
-- `T[]` (default on — important because ASP.NET often materializes arrays)
-- `List<T>` (default on)
 
-Also registers closed collection/dictionary shapes found on members when enabled.
+`T[]`, `List<T>`, and other collection/dictionary shapes are registered **when they appear as members**, not for every `T`. Auto-emitting `T[]`/`List<T>` for every DataContract triples STJ roots and never finishes CoreCompile on large graphs.
 
 ### TypeInfo property names
 
@@ -131,8 +129,8 @@ Plain object/enum roots keep STJ's default short names unless two types would st
 | Property | Default | Meaning |
 | ---------- | --------- | --------- |
 | `MinimalJsonSerializerEnabled` | `true` | Master switch |
-| `MinimalJsonEmitArrays` | `true` | Emit `T[]` roots |
-| `MinimalJsonEmitList` | `true` | Emit `List<T>` roots |
+| `MinimalJsonEmitArrays` | `true` | Emit `T[]` roots when `T[]` appears as a member |
+| `MinimalJsonEmitList` | `true` | Emit `List<T>` roots when `List<T>` appears as a member |
 | `MinimalJsonEmitDeclaredCollections` | `true` | Emit declared collection interface closed types |
 | `MinimalJsonEmitDictionaries` | `true` | Emit dictionary closed types |
 | `MinimalJsonWarnOpenGenerics` | `summary` | MSJ0004 mode: `summary` (one warning), `all` (per type), or `none` |
@@ -199,6 +197,8 @@ dotnet run --project samples/Sample.Host
 - Polymorphism / `$type` discriminators are not auto-generated (keep your own `JsonTypeInfo` modifiers)
 - `DataMember.Name` is not rewritten to `[JsonPropertyName]` (STJ naming policies remain source of truth)
 - Multi-assembly discovery is not enabled by default (one project → one context)
+- `JsonElement` / `JsonDocument` / `JsonNode` / `JsonValueKind` are never emitted as roots (STJ built-in converters; source-gen of those types never completes). Prefer a `string` JSON payload on `[DataMember]` if the document must round-trip through the generated context.
+- Types whose JSON graph contains `IFormFile` / `IFormFileCollection` / `Stream` / `PipeReader` are omitted as JSON roots (multipart/runtime graphs; STJ walking them pulls `HttpContext` and never completes). No `[JsonIgnore]` or csproj flag is required. Those types remain available for form binding.
 
 ## Diagnostics
 

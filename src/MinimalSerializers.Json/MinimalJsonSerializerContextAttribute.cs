@@ -7,10 +7,10 @@ namespace MinimalSerializers.Json;
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class MinimalJsonSerializerContextAttribute : Attribute
 {
-    /// <summary>When true, emits T[] roots for discovered object/enum types. Default true.</summary>
+    /// <summary>When true, emits T[] roots for array members. Default true.</summary>
     public bool IncludeArrays { get; set; } = true;
 
-    /// <summary>When true, emits List&lt;T&gt; roots for discovered object/enum types. Default true.</summary>
+    /// <summary>When true, emits List&lt;T&gt; roots for List members. Default true.</summary>
     public bool IncludeList { get; set; } = true;
 
     /// <summary>When true, also registers closed collection interface types found on members. Default true.</summary>

@@ -46,7 +46,18 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
             var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(
                 ParseLangVersion(LangVersion)
             );
-            var trees = new List<SyntaxTree>();
+            var trees = new List<SyntaxTree>
+            {
+                // SDK ImplicitUsings live in obj/*.GlobalUsings.g.cs, which is often
+                // not yet in @(Compile) when this target runs BeforeCompile.
+                // Without these, List<T> / IReadOnlyList<T> members are ErrorType
+                // and never become JSON roots — consumers then add csproj flags.
+                CSharpSyntaxTree.ParseText(
+                    DiscoveryImplicitUsings,
+                    parseOptions,
+                    path: "__MinimalJson_ImplicitUsings.cs"
+                ),
+            };
             foreach (var item in CompileFiles)
             {
                 var path = item.ItemSpec;
@@ -67,7 +78,9 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
 
             var references = new List<MetadataReference>();
 
-            // Prefer full trusted platform set so BCL types (DateOnly, Guid, etc.) resolve.
+            // Task-host TPA first so AttributeUsage metadata is coherent, then the
+            // consumer ReferencePath. Dedup by full path only — skipping net11 BCL
+            // by file name mixed AttributeUsage and made GetAttributes NRE.
             var tpa = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES");
             if (!string.IsNullOrEmpty(tpa))
             {
@@ -168,8 +181,10 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
                 return false;
             }
 
-            if (result.Contexts.Any(static c => c.IsPartial && c.DerivesFromJsonSerializerContext)
-                && generated.Count == 0)
+            if (
+                result.Contexts.Any(static c => c.IsPartial && c.DerivesFromJsonSerializerContext)
+                && generated.Count == 0
+            )
             {
                 Log.LogError(
                     "MSJ0006: MinimalJson contexts were discovered but no generated sources were written."
@@ -185,9 +200,8 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
         {
             Log.LogError(
                 "MSJ0006: Failed to generate MinimalJson serializer contexts: {0}",
-                ex.Message
+                ex.ToString()
             );
-            Log.LogMessage(MessageImportance.Low, ex.ToString());
             return false;
         }
     }
@@ -207,6 +221,16 @@ public sealed class GenerateMinimalJsonSerializerContexts : Task
                 break;
         }
     }
+
+    private const string DiscoveryImplicitUsings = """
+        global using System;
+        global using System.Collections.Generic;
+        global using System.IO;
+        global using System.Linq;
+        global using System.Net.Http;
+        global using System.Threading;
+        global using System.Threading.Tasks;
+        """;
 
     private static OpenGenericWarningMode ParseOpenGenericWarningMode(string? value)
     {

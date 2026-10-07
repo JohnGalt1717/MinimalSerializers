@@ -25,6 +25,13 @@ public static class MinimalJsonContextSourceEmitter
             sb.AppendLine();
         }
 
+        if (context.EmitMetadataGenerationMode)
+        {
+            sb.AppendLine(
+                "[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]"
+            );
+        }
+
         foreach (var root in context.Roots)
         {
             sb.Append("[JsonSerializable(typeof(").Append(root.TypeDisplayName).Append(')');

@@ -11,7 +11,8 @@ public sealed class DiscoveredContext
         bool isPartial,
         bool derivesFromJsonSerializerContext,
         ImmutableArray<DiscoveredRoot> roots,
-        ImmutableArray<DiscoveryDiagnostic> diagnostics
+        ImmutableArray<DiscoveryDiagnostic> diagnostics,
+        bool emitMetadataGenerationMode = false
     )
     {
         NamespaceName = namespaceName;
@@ -21,6 +22,7 @@ public sealed class DiscoveredContext
         DerivesFromJsonSerializerContext = derivesFromJsonSerializerContext;
         Roots = roots;
         Diagnostics = diagnostics;
+        EmitMetadataGenerationMode = emitMetadataGenerationMode;
     }
 
     public string NamespaceName { get; }
@@ -40,6 +42,12 @@ public sealed class DiscoveredContext
         Roots.Select(static r => r.TypeDisplayName).ToImmutableArray();
 
     public ImmutableArray<DiscoveryDiagnostic> Diagnostics { get; }
+
+    /// <summary>
+    /// When true, the generated partial emits Metadata-only STJ source-gen
+    /// (no duplicate <c>JsonSourceGenerationOptions</c> on the user partial).
+    /// </summary>
+    public bool EmitMetadataGenerationMode { get; }
 
     public string FullyQualifiedMetadataName =>
         string.IsNullOrEmpty(NamespaceName) ? TypeName : NamespaceName + "." + TypeName;

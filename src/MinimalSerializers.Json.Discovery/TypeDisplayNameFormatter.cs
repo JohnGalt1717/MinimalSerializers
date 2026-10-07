@@ -9,8 +9,7 @@ internal static class TypeDisplayNameFormatter
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
         genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-        miscellaneousOptions: SymbolDisplayMiscellaneousOptions.ExpandNullable
-            | SymbolDisplayMiscellaneousOptions.UseSpecialTypes
+        miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes
     );
 
     private static readonly SymbolDisplayFormat ShortNameFormat = new(

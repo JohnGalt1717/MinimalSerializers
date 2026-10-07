@@ -1,5 +1,15 @@
 # Release Notes
 
+## 1.0.6
+
+- Do not emit `[JsonSerializable]` roots for `JsonElement`, `JsonDocument`, `JsonValueKind`, or `System.Text.Json.Nodes.*`. STJ already converts those types; registering them as source-gen roots never completes CoreCompile.
+- Omit DataContract types whose JSON graph contains `IFormFile`, `IFormFileCollection`, `Stream`, or `PipeReader` (multipart/runtime). No `[JsonIgnore]` or consumer csproj flag is required.
+- Emit `T[]` / `List<T>` roots only when those shapes appear as members. Auto-emitting both for every DataContract triples STJ roots and never finishes CoreCompile on large graphs.
+- Skip abstract DataContracts as JSON roots (generic bases such as `QueryRequestDto<T>`). Concrete derived types stay registered.
+- When the user context has no `JsonSourceGenerationOptions`, emit Metadata-only STJ generation so large graphs compile with analyzers enabled.
+- Discovery always parses SDK implicit usings (`System.Collections.Generic`, …) so `List<T>` / `IReadOnlyList<T>` members resolve when source files rely on `ImplicitUsings` instead of a file-level `using`. No consumer csproj flag is required.
+- When `List<T>` / `IReadOnlyList<T>` bind as ErrorType (task-host net8 TPA plus consumer net11 BCL), still emit those member collection roots from the generic name.
+
 ## 1.0.5
 
 - Invalidate `stamp.minimaljson` before the incremental skip when `*.MinimalJson.g.cs` is missing, so a leftover stamp cannot produce CS0534 (#7)

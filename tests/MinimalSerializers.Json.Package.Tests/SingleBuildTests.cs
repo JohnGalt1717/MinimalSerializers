@@ -23,6 +23,7 @@ public sealed class SingleBuildTests
         WriteModelsAndProgram(
             consumer,
             models: """
+            using System.Collections.Generic;
             using System.Runtime.Serialization;
             using System.Text.Json.Serialization;
             using MinimalSerializers.Json;
@@ -34,6 +35,12 @@ public sealed class SingleBuildTests
             {
                 [DataMember]
                 public required string Name { get; init; }
+
+                [DataMember]
+                public FooDto[]? Related { get; init; }
+
+                [DataMember]
+                public List<FooDto>? Children { get; init; }
             }
 
             [MinimalJsonSerializerContext]
@@ -97,6 +104,7 @@ public sealed class SingleBuildTests
         WriteModelsAndProgram(
             consumer,
             models: """
+            using System.Collections.Generic;
             using System.Runtime.Serialization;
             using System.Text.Json.Serialization;
             using MinimalSerializers.Json;
@@ -113,6 +121,7 @@ public sealed class SingleBuildTests
             public sealed record ListMoneyDetailsDto
             {
                 [DataMember] public required MoneyDetailsDto[] Items { get; init; }
+                [DataMember] public required List<MoneyDetailsDto> More { get; init; }
             }
 
             [DataContract]
@@ -134,12 +143,12 @@ public sealed class SingleBuildTests
             if (options.GetTypeInfo(typeof(ListOrderDto)) is null) throw new Exception("ListOrderDto missing");
             if (options.GetTypeInfo(typeof(MoneyDetailsDto)) is null) throw new Exception("MoneyDetailsDto missing");
             if (options.GetTypeInfo(typeof(List<MoneyDetailsDto>)) is null) throw new Exception("List<MoneyDetailsDto> missing");
-            if (options.GetTypeInfo(typeof(List<ListMoneyDetailsDto>)) is null) throw new Exception("List<ListMoneyDetailsDto> missing");
-            if (options.GetTypeInfo(typeof(ListMoneyDetailsDto[])) is null) throw new Exception("ListMoneyDetailsDto[] missing");
+            if (options.GetTypeInfo(typeof(MoneyDetailsDto[])) is null) throw new Exception("MoneyDetailsDto[] missing");
 
             var payload = new ListMoneyDetailsDto
             {
                 Items = [new MoneyDetailsDto { Id = "1" }],
+                More = [new MoneyDetailsDto { Id = "2" }],
             };
             var json = JsonSerializer.Serialize(payload, options);
             _ = JsonSerializer.Deserialize<ListMoneyDetailsDto>(json, options);
@@ -160,6 +169,69 @@ public sealed class SingleBuildTests
         text.Should().Contain("TypeInfoPropertyName = \"ListOf_");
         text.Should().Contain("[JsonSerializable(typeof(global::Consumer.ListMoneyDetailsDto))]");
 
+        _feed.Dotnet(consumer, "run --no-build --nologo").ExitCode.Should().Be(0);
+    }
+
+    [Fact]
+    public void ImplicitUsings_discovers_IReadOnlyList_members_without_file_using()
+    {
+        var consumer = _feed.CreateConsumer("ConsumerImplicitUsings");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Consumer;
+
+            [DataContract]
+            public sealed class ChildDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [DataContract]
+            public sealed class ParentDto
+            {
+                [DataMember]
+                public required string Title { get; init; }
+
+                [DataMember]
+                public required List<ChildDto> Children { get; init; }
+
+                [DataMember]
+                public required IReadOnlyList<string> Tags { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class ConsumerJsonContext : JsonSerializerContext;
+            """,
+            program: """
+            using System.Text.Json;
+            using Consumer;
+
+            var options = new JsonSerializerOptions { TypeInfoResolver = ConsumerJsonContext.Default };
+            if (options.GetTypeInfo(typeof(ParentDto)) is null) throw new Exception("ParentDto missing");
+            if (options.GetTypeInfo(typeof(List<ChildDto>)) is null) throw new Exception("List<ChildDto> missing");
+            if (options.GetTypeInfo(typeof(IReadOnlyList<string>)) is null) throw new Exception("IReadOnlyList<string> missing");
+            var json = JsonSerializer.Serialize(
+                new ParentDto { Title = "t", Children = [new ChildDto { Name = "c" }], Tags = ["a"] },
+                options);
+            _ = JsonSerializer.Deserialize<ParentDto>(json, options);
+            Console.WriteLine("ok-implicit");
+            """
+        );
+
+        var build = _feed.Dotnet(consumer, "build --nologo");
+        build.ExitCode.Should().Be(0, because: build.Output);
+        var generated = Directory
+            .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+            .Single();
+        var text = File.ReadAllText(generated);
+        text.Should().Contain("List<");
+        text.Should().Contain("IReadOnlyList");
         _feed.Dotnet(consumer, "run --no-build --nologo").ExitCode.Should().Be(0);
     }
 
@@ -278,11 +350,7 @@ public sealed class SingleBuildTests
             SearchOption.AllDirectories
         );
         generated.Should().NotBeEmpty("generated MinimalJson file should exist after first build");
-        var stamps = Directory.GetFiles(
-            consumer,
-            "stamp.minimaljson",
-            SearchOption.AllDirectories
-        );
+        var stamps = Directory.GetFiles(consumer, "stamp.minimaljson", SearchOption.AllDirectories);
         stamps.Should().NotBeEmpty("stamp.minimaljson should exist after first build");
 
         foreach (var path in generated)
