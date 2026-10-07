@@ -22,6 +22,7 @@
     <_MinimalJson_BaseOut Condition="'$(_MinimalJson_BaseOut)' == ''">obj/$(Configuration)/</_MinimalJson_BaseOut>
     <MinimalJson_GeneratedDir>$(_MinimalJson_BaseOut)minimaljson/</MinimalJson_GeneratedDir>
     <MinimalJson_StampFile>$(MinimalJson_GeneratedDir)stamp.minimaljson</MinimalJson_StampFile>
+    <MinimalJson_InputsFile>$(MinimalJson_GeneratedDir)inputs.minimaljson</MinimalJson_InputsFile>
   </PropertyGroup>
 
   <!-- Visual Studio fast up-to-date check: missing stamp means generation still needs to run. -->
@@ -63,6 +64,27 @@
     <Delete Files="$(MinimalJson_StampFile)" Condition="'@(_MinimalJson_MissingGenerated)' != ''" />
   </Target>
 
+  <!-- @(Compile) timestamps do not change when a globbed file is deleted, and
+       MinimalJsonEmit* / LangVersion can change with no file touch. Fingerprint
+       those identities and option values (write-if-different) so GenerateContexts
+       cannot skip with stale roots. -->
+  <Target Name="MinimalJson_WriteInputFingerprint" Condition="'$(MinimalJsonSerializerEnabled)' == 'true'">
+    <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
+    <ItemGroup>
+      <_MinimalJson_CompileForFingerprint Remove="@(_MinimalJson_CompileForFingerprint)" />
+      <_MinimalJson_FingerprintLines Remove="@(_MinimalJson_FingerprintLines)" />
+      <_MinimalJson_CompileForFingerprint Include="@(Compile)" Condition="!$([System.String]::Copy('%(Identity)').EndsWith('.MinimalJson.g.cs'))" />
+      <_MinimalJson_FingerprintLines Include="LangVersion=$(LangVersion)" />
+      <_MinimalJson_FingerprintLines Include="EmitArrays=$(MinimalJsonEmitArrays)" />
+      <_MinimalJson_FingerprintLines Include="EmitList=$(MinimalJsonEmitList)" />
+      <_MinimalJson_FingerprintLines Include="EmitDeclaredCollections=$(MinimalJsonEmitDeclaredCollections)" />
+      <_MinimalJson_FingerprintLines Include="EmitDictionaries=$(MinimalJsonEmitDictionaries)" />
+      <_MinimalJson_FingerprintLines Include="WarnOpenGenerics=$(MinimalJsonWarnOpenGenerics)" />
+      <_MinimalJson_FingerprintLines Include="@(_MinimalJson_CompileForFingerprint->'Compile=%(FullPath)')" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(MinimalJson_InputsFile)" Lines="@(_MinimalJson_FingerprintLines)" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
+  </Target>
+
   <!-- Outputs must be the stamp file only. MSBuild does not expand ** globs in
        Target Outputs, so listing $(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs
        is treated as a literal missing path and the target runs every build.
@@ -70,9 +92,9 @@
        timestamps older than Inputs, which keeps the target permanently dirty. -->
   <Target Name="MinimalJson_GenerateContexts"
           BeforeTargets="BeforeCompile;CoreCompile"
-          DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt;MinimalJson_InvalidateStaleStamp"
+          DependsOnTargets="ResolveAssemblyReferences;MinimalJson_EnsureTasksBuilt;MinimalJson_InvalidateStaleStamp;MinimalJson_WriteInputFingerprint"
           Condition="'$(MinimalJsonSerializerEnabled)' == 'true' and ('$(DesignTimeBuild)' != 'true' or '$(MinimalJson_EnableDesignTime)' == 'true') and '$(MinimalJson_TaskAssembly)' != ''"
-          Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath);$(MinimalJson_TaskAssembly)"
+          Inputs="@(Compile);@(ReferencePath);$(MSBuildProjectFullPath);$(MinimalJson_TaskAssembly);$(MinimalJson_InputsFile)"
           Outputs="$(MinimalJson_StampFile)">
     <MakeDir Directories="$(MinimalJson_GeneratedDir)" />
     <ItemGroup>
@@ -98,6 +120,7 @@
            would otherwise delete *.MinimalJson.g.cs as stale intermediates. -->
       <FileWrites Include="$(MinimalJson_GeneratedDir)**\*.MinimalJson.g.cs" />
       <FileWrites Include="$(MinimalJson_StampFile)" />
+      <FileWrites Include="$(MinimalJson_InputsFile)" />
     </ItemGroup>
   </Target>
 </Project>

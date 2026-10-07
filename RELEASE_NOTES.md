@@ -2,7 +2,7 @@
 
 ## 1.0.7
 
-- Incremental builds skip discovery when sources and references are unchanged. Target Outputs no longer use a `**` glob (MSBuild treats that as a missing file, so generation ran every build). Generated files are always recorded in `FileWrites` so IncrementalClean cannot delete them when generation is skipped, which previously forced dependents to rebuild.
+- Incremental builds skip discovery when sources and references are unchanged. Target Outputs no longer use a `**` glob (MSBuild treats that as a missing file, so generation ran every build). Generated files are always recorded in `FileWrites` so IncrementalClean cannot delete them when generation is skipped, which previously forced dependents to rebuild. A write-if-different fingerprint of compile identities and emit options reruns generation when a DTO file is removed or `MinimalJsonEmit*` changes.
 - Baseline is .NET 10+. The package targets `net10.0` and `net11.0`; the MSBuild task host is `net10.0`. .NET 8 and .NET 9 TFMs are dropped.
 
 ## 1.0.6

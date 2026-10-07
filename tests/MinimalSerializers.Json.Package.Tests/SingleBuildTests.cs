@@ -462,6 +462,119 @@ public sealed class SingleBuildTests
     }
 
     [Fact]
+    public void Removing_a_compile_item_reruns_generation()
+    {
+        var consumer = _feed.CreateConsumer("ConsumerRemoveDto");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Consumer;
+
+            [DataContract]
+            public sealed class FooDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class ConsumerJsonContext : JsonSerializerContext;
+            """,
+            program: """
+            Console.WriteLine("ok-remove");
+            """
+        );
+        File.WriteAllText(
+            Path.Combine(consumer, "BarDto.cs"),
+            """
+            using System.Runtime.Serialization;
+
+            namespace Consumer;
+
+            [DataContract]
+            public sealed class BarDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+            """
+        );
+
+        var build1 = _feed.Dotnet(consumer, "build --nologo");
+        build1.ExitCode.Should().Be(0, because: build1.Output);
+        File.ReadAllText(
+                Directory
+                    .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+                    .Should()
+                    .ContainSingle()
+                    .Subject
+            )
+            .Should()
+            .Contain("BarDto");
+
+        File.Delete(Path.Combine(consumer, "BarDto.cs"));
+        const string skipGenerate =
+            "Skipping target \"MinimalJson_GenerateContexts\" because all output files are up-to-date";
+        var afterDelete = _feed.Dotnet(consumer, "build -v:n --nologo");
+        afterDelete.ExitCode.Should().Be(0, because: afterDelete.Output);
+        afterDelete.Output.Should().NotContain(skipGenerate, because: afterDelete.Output);
+        File.ReadAllText(
+                Directory
+                    .GetFiles(consumer, "*.MinimalJson.g.cs", SearchOption.AllDirectories)
+                    .Should()
+                    .ContainSingle()
+                    .Subject
+            )
+            .Should()
+            .NotContain("BarDto");
+    }
+
+    [Fact]
+    public void Changing_emit_option_reruns_generation()
+    {
+        var consumer = _feed.CreateConsumer("ConsumerEmitOption");
+        WriteModelsAndProgram(
+            consumer,
+            models: """
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+
+            namespace Consumer;
+
+            [DataContract]
+            public sealed class FooDto
+            {
+                [DataMember]
+                public required string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class ConsumerJsonContext : JsonSerializerContext;
+            """,
+            program: """
+            Console.WriteLine("ok-option");
+            """
+        );
+
+        var build1 = _feed.Dotnet(consumer, "build --nologo");
+        build1.ExitCode.Should().Be(0, because: build1.Output);
+
+        const string skipGenerate =
+            "Skipping target \"MinimalJson_GenerateContexts\" because all output files are up-to-date";
+        var afterOption = _feed.Dotnet(
+            consumer,
+            "build -v:n --nologo -p:MinimalJsonEmitArrays=false"
+        );
+        afterOption.ExitCode.Should().Be(0, because: afterOption.Output);
+        afterOption.Output.Should().NotContain(skipGenerate, because: afterOption.Output);
+    }
+
+    [Fact]
     public void Transitive_dependent_without_context_skips_generation_on_second_build()
     {
         var root = _feed.CreateConsumer("ConsumerGraph");
