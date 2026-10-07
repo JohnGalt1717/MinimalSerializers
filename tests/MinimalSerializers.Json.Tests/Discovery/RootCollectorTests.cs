@@ -552,4 +552,172 @@ public sealed class RootCollectorTests
         roots.Should().Contain(r => r.Contains("Node"));
         roots.Should().Contain(r => r.Contains("Other"));
     }
+
+    [Fact]
+    public void ErrorType_immutable_collections_use_immutable_namespace()
+    {
+        const string source = """
+            using System.Collections.Immutable;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            [DataContract]
+            public sealed class EnvelopeDto
+            {
+                [DataMember]
+                public ImmutableArray<string> Tags { get; init; }
+
+                [DataMember]
+                public ImmutableDictionary<string, int> Counts { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        compilation
+            .GetTypeByMetadataName("System.Collections.Immutable.ImmutableArray`1")
+            .Should()
+            .BeNull("the test compilation must leave ImmutableArray as ErrorType");
+        var result = JsonSerializableRootCollector.Collect(compilation);
+        var names = result.Contexts[0].RootTypeDisplayNames;
+        names.Should().Contain(r => r.Contains("EnvelopeDto"));
+        names
+            .Should()
+            .Contain(r =>
+                r.Contains("System.Collections.Immutable.ImmutableArray") && r.Contains("string")
+            );
+        names
+            .Should()
+            .Contain(r =>
+                r.Contains("System.Collections.Immutable.ImmutableDictionary")
+                && r.Contains("string")
+            );
+        names.Should().NotContain(r => r.Contains("System.Collections.Generic.Immutable"));
+    }
+
+    [Fact]
+    public void SearchOption_enum_member_does_not_omit_the_datacontract()
+    {
+        const string source = """
+            using System.IO;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            [DataContract]
+            public sealed class FilterDto
+            {
+                [DataMember]
+                public SearchOption Mode { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        var names = JsonSerializableRootCollector
+            .Collect(compilation)
+            .Contexts[0]
+            .RootTypeDisplayNames;
+        names.Should().Contain(r => r.Contains("FilterDto") && !r.Contains("List"));
+    }
+
+    [Fact]
+    public void Nested_non_datacontract_with_stream_omits_parent_root()
+    {
+        const string source = """
+            using System.IO;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            public sealed class Wrapper
+            {
+                public Stream Content { get; init; }
+            }
+
+            [DataContract]
+            public sealed class EnvelopeDto
+            {
+                [DataMember]
+                public Wrapper Value { get; init; }
+            }
+
+            [DataContract]
+            public sealed class OkDto
+            {
+                [DataMember]
+                public string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        var names = JsonSerializableRootCollector
+            .Collect(compilation)
+            .Contexts[0]
+            .RootTypeDisplayNames;
+        names.Should().Contain(r => r.Contains("OkDto"));
+        names.Should().NotContain(r => r.Contains("EnvelopeDto"));
+        names.Should().NotContain(r => r.Contains("Wrapper"));
+        names.Should().NotContain(r => r.Contains("Stream"));
+    }
+
+    [Fact]
+    public void Cyclic_datacontracts_with_stream_on_one_side_omit_both()
+    {
+        const string source = """
+            using System.IO;
+            using System.Runtime.Serialization;
+            using System.Text.Json.Serialization;
+            using MinimalSerializers.Json;
+            namespace Tests;
+
+            [DataContract]
+            public sealed class NodeA
+            {
+                [DataMember]
+                public NodeB Next { get; init; }
+
+                [DataMember]
+                public Stream Payload { get; init; }
+            }
+
+            [DataContract]
+            public sealed class NodeB
+            {
+                [DataMember]
+                public NodeA Prev { get; init; }
+            }
+
+            [DataContract]
+            public sealed class OkDto
+            {
+                [DataMember]
+                public string Name { get; init; }
+            }
+
+            [MinimalJsonSerializerContext]
+            public partial class Ctx : JsonSerializerContext;
+            """;
+
+        var compilation = CompilationHelper.Create(source);
+        var names = JsonSerializableRootCollector
+            .Collect(compilation)
+            .Contexts[0]
+            .RootTypeDisplayNames;
+        names.Should().Contain(r => r.Contains("OkDto"));
+        names.Should().NotContain(r => r.Contains("NodeA"));
+        names.Should().NotContain(r => r.Contains("NodeB"));
+        names.Should().NotContain(r => r.Contains("Stream"));
+    }
 }

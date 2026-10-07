@@ -171,7 +171,7 @@ public static class JsonSerializableRootCollector
         }
 
         // Fallback when the attribute assembly isn't fully resolvable in the task compilation.
-        foreach (var attribute in symbol.GetAttributes())
+        foreach (var attribute in TryGetAttributes(symbol))
         {
             var name = attribute.AttributeClass?.Name;
             if (name is "MinimalJsonSerializerContextAttribute" or "MinimalJsonSerializerContext")
@@ -197,7 +197,7 @@ public static class JsonSerializableRootCollector
 
     private static bool HasJsonSourceGenerationOptions(INamedTypeSymbol symbol)
     {
-        foreach (var attribute in symbol.GetAttributes())
+        foreach (var attribute in TryGetAttributes(symbol))
         {
             var name = attribute.AttributeClass?.Name;
             if (name is "JsonSourceGenerationOptionsAttribute" or "JsonSourceGenerationOptions")
@@ -243,7 +243,9 @@ public static class JsonSerializableRootCollector
             if (include)
             {
                 var display =
-                    "global::System.Collections.Generic."
+                    "global::"
+                    + ErrorTypeCollectionNamespace(error.Name)
+                    + "."
                     + error.Name
                     + "<"
                     + TypeDisplayNameFormatter.ToGlobalDisplayString(element)
@@ -289,7 +291,9 @@ public static class JsonSerializableRootCollector
             if (options.IncludeDictionaries)
             {
                 var display =
-                    "global::System.Collections.Generic."
+                    "global::"
+                    + ErrorTypeCollectionNamespace(error.Name)
+                    + "."
                     + error.Name
                     + "<"
                     + TypeDisplayNameFormatter.ToGlobalDisplayString(key)
@@ -329,6 +333,11 @@ public static class JsonSerializableRootCollector
 
     private static bool IsKnownDictionaryTypeName(string name) =>
         name is "Dictionary" or "IDictionary" or "IReadOnlyDictionary" or "ImmutableDictionary";
+
+    private static string ErrorTypeCollectionNamespace(string name) =>
+        name is "ImmutableArray" or "ImmutableList" or "ImmutableDictionary"
+            ? "System.Collections.Immutable"
+            : "System.Collections.Generic";
 
     private static bool IsKnownCollectionDefinition(INamedTypeSymbol definition)
     {
@@ -1055,27 +1064,7 @@ public static class JsonSerializableRootCollector
             return true;
         }
 
-        // Multipart / runtime types. STJ source-gen walking IFormFile/Stream
-        // pulls HttpContext and never completes. Not JSON wire types.
-        if (
-            ns
-            is "Microsoft.AspNetCore.Http"
-                or "Microsoft.AspNetCore.Http.Features"
-                or "System.IO"
-                or "System.IO.Pipelines"
-        )
-        {
-            return true;
-        }
-
-        return type.Name
-            is "IFormFile"
-                or "IFormFileCollection"
-                or "FormFile"
-                or "FormFileCollection"
-                or "Stream"
-                or "PipeReader"
-                or "PipeWriter";
+        return IsNonJsonFrameworkTypeName(type.Name);
     }
 
     /// <summary>
@@ -1090,6 +1079,23 @@ public static class JsonSerializableRootCollector
         INamedTypeSymbol? ignoreDataMemberAttr,
         INamedTypeSymbol? jsonIgnoreAttr,
         Dictionary<ITypeSymbol, bool> cache
+    ) =>
+        ContainsNonJsonFrameworkGraph(
+            type,
+            dataContractAttr,
+            ignoreDataMemberAttr,
+            jsonIgnoreAttr,
+            cache,
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)
+        );
+
+    private static bool ContainsNonJsonFrameworkGraph(
+        ITypeSymbol type,
+        INamedTypeSymbol? dataContractAttr,
+        INamedTypeSymbol? ignoreDataMemberAttr,
+        INamedTypeSymbol? jsonIgnoreAttr,
+        Dictionary<ITypeSymbol, bool> cache,
+        HashSet<ITypeSymbol> visiting
     )
     {
         type = UnwrapNullable(type) ?? type;
@@ -1099,133 +1105,201 @@ public static class JsonSerializableRootCollector
             return cached;
         }
 
+        if (!visiting.Add(type))
+        {
+            return false;
+        }
+
+        var poison = ComputeNonJsonFrameworkGraph(
+            type,
+            dataContractAttr,
+            ignoreDataMemberAttr,
+            jsonIgnoreAttr,
+            cache,
+            visiting
+        );
+
+        visiting.Remove(type);
+
+        // Do not memoize "safe" while an ancestor is still in progress: a later
+        // Stream member on that ancestor would otherwise leave a cyclic peer cached
+        // as safe.
+        if (poison || visiting.Count == 0)
+        {
+            cache[type] = poison;
+        }
+
+        return poison;
+    }
+
+    private static bool ComputeNonJsonFrameworkGraph(
+        ITypeSymbol type,
+        INamedTypeSymbol? dataContractAttr,
+        INamedTypeSymbol? ignoreDataMemberAttr,
+        INamedTypeSymbol? jsonIgnoreAttr,
+        Dictionary<ITypeSymbol, bool> cache,
+        HashSet<ITypeSymbol> visiting
+    )
+    {
         if (type is IErrorTypeSymbol)
         {
-            var poison = IsNonJsonFrameworkType(type);
-            cache[type] = poison;
-            return poison;
+            return IsNonJsonFrameworkType(type);
         }
 
         if (IsNonJsonFrameworkType(type))
         {
-            cache[type] = true;
             return true;
         }
 
         if (type is IArrayTypeSymbol array)
         {
-            var poison = ContainsNonJsonFrameworkGraph(
+            return ContainsNonJsonFrameworkGraph(
                 array.ElementType,
                 dataContractAttr,
                 ignoreDataMemberAttr,
                 jsonIgnoreAttr,
-                cache
+                cache,
+                visiting
             );
-            cache[type] = poison;
-            return poison;
         }
 
         if (type is not INamedTypeSymbol named)
         {
-            cache[type] = false;
             return false;
         }
 
         if (IsPrimitiveLike(named) || named.TypeKind == TypeKind.Enum)
         {
-            cache[type] = false;
             return false;
         }
 
-        // Cycle guard before walking members or collection elements.
-        cache[type] = false;
+        var isDataContract = HasNamedAttribute(
+            named,
+            dataContractAttr,
+            "DataContractAttribute",
+            "DataContract"
+        );
 
-        if (HasNamedAttribute(named, dataContractAttr, "DataContractAttribute", "DataContract"))
+        if (
+            isDataContract
+            && MembersContainNonJsonFrameworkGraph(
+                named,
+                dataContractAttr,
+                ignoreDataMemberAttr,
+                jsonIgnoreAttr,
+                includeNonPublic: true,
+                cache,
+                visiting
+            )
+        )
         {
-            foreach (var member in named.GetMembers())
-            {
-                if (member.IsStatic)
-                {
-                    continue;
-                }
-
-                if (
-                    HasNamedAttribute(
-                        member,
-                        ignoreDataMemberAttr,
-                        "IgnoreDataMemberAttribute",
-                        "IgnoreDataMember"
-                    )
-                    || HasNamedAttribute(
-                        member,
-                        jsonIgnoreAttr,
-                        "JsonIgnoreAttribute",
-                        "JsonIgnore"
-                    )
-                )
-                {
-                    continue;
-                }
-
-                ITypeSymbol? memberType = member switch
-                {
-                    IPropertySymbol p => p.Type,
-                    IFieldSymbol f => f.Type,
-                    _ => null,
-                };
-                if (memberType is null)
-                {
-                    continue;
-                }
-
-                if (
-                    ContainsNonJsonFrameworkGraph(
-                        memberType,
-                        dataContractAttr,
-                        ignoreDataMemberAttr,
-                        jsonIgnoreAttr,
-                        cache
-                    )
-                )
-                {
-                    cache[type] = true;
-                    return true;
-                }
-            }
+            return true;
         }
 
         if (IsSupportedCollection(named, out var element))
         {
-            var poison = ContainsNonJsonFrameworkGraph(
+            return ContainsNonJsonFrameworkGraph(
                 element,
                 dataContractAttr,
                 ignoreDataMemberAttr,
                 jsonIgnoreAttr,
-                cache
+                cache,
+                visiting
             );
-            cache[type] = poison;
-            return poison;
         }
 
         if (IsSupportedDictionary(named, out var key, out var value))
         {
-            var poison =
-                ContainsNonJsonFrameworkGraph(
+            return ContainsNonJsonFrameworkGraph(
                     key,
                     dataContractAttr,
                     ignoreDataMemberAttr,
                     jsonIgnoreAttr,
-                    cache
+                    cache,
+                    visiting
                 )
                 || ContainsNonJsonFrameworkGraph(
                     value,
                     dataContractAttr,
                     ignoreDataMemberAttr,
                     jsonIgnoreAttr,
-                    cache
+                    cache,
+                    visiting
                 );
-            cache[type] = poison;
-            return poison;
+        }
+
+        return !isDataContract
+            && MembersContainNonJsonFrameworkGraph(
+                named,
+                dataContractAttr,
+                ignoreDataMemberAttr,
+                jsonIgnoreAttr,
+                includeNonPublic: false,
+                cache,
+                visiting
+            );
+    }
+
+    private static bool MembersContainNonJsonFrameworkGraph(
+        INamedTypeSymbol named,
+        INamedTypeSymbol? dataContractAttr,
+        INamedTypeSymbol? ignoreDataMemberAttr,
+        INamedTypeSymbol? jsonIgnoreAttr,
+        bool includeNonPublic,
+        Dictionary<ITypeSymbol, bool> cache,
+        HashSet<ITypeSymbol> visiting
+    )
+    {
+        foreach (var member in named.GetMembers())
+        {
+            if (member.IsStatic)
+            {
+                continue;
+            }
+
+            if (
+                HasNamedAttribute(
+                    member,
+                    ignoreDataMemberAttr,
+                    "IgnoreDataMemberAttribute",
+                    "IgnoreDataMember"
+                ) || HasNamedAttribute(member, jsonIgnoreAttr, "JsonIgnoreAttribute", "JsonIgnore")
+            )
+            {
+                continue;
+            }
+
+            ITypeSymbol? memberType = member switch
+            {
+                IPropertySymbol p
+                    when includeNonPublic
+                        || (
+                            p.DeclaredAccessibility == Accessibility.Public
+                            && p.GetMethod is not null
+                        ) => p.Type,
+                IFieldSymbol f
+                    when includeNonPublic || f.DeclaredAccessibility == Accessibility.Public =>
+                    f.Type,
+                _ => null,
+            };
+            if (memberType is null)
+            {
+                continue;
+            }
+
+            if (
+                ContainsNonJsonFrameworkGraph(
+                    memberType,
+                    dataContractAttr,
+                    ignoreDataMemberAttr,
+                    jsonIgnoreAttr,
+                    cache,
+                    visiting
+                )
+            )
+            {
+                return true;
+            }
         }
 
         return false;
@@ -1233,27 +1307,50 @@ public static class JsonSerializableRootCollector
 
     private static bool IsNonJsonFrameworkType(ITypeSymbol type)
     {
-        var ns = type.ContainingNamespace?.ToDisplayString();
-        if (
-            ns
-            is "Microsoft.AspNetCore.Http"
-                or "Microsoft.AspNetCore.Http.Features"
-                or "System.IO"
-                or "System.IO.Pipelines"
-        )
+        if (IsNonJsonFrameworkTypeName(type.Name))
         {
             return true;
         }
 
-        return type.Name
+        if (type is IErrorTypeSymbol)
+        {
+            return false;
+        }
+
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            if (IsNonJsonFrameworkTypeName(current.Name))
+            {
+                return true;
+            }
+        }
+
+        if (type is INamedTypeSymbol named)
+        {
+            foreach (var iface in named.AllInterfaces)
+            {
+                if (IsNonJsonFrameworkTypeName(iface.Name))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsNonJsonFrameworkTypeName(string name) =>
+        name
             is "IFormFile"
                 or "IFormFileCollection"
                 or "FormFile"
                 or "FormFileCollection"
                 or "Stream"
                 or "PipeReader"
-                or "PipeWriter";
-    }
+                or "PipeWriter"
+                or "HttpContext"
+                or "HttpRequest"
+                or "HttpResponse";
 
     private static void WalkMembers(
         INamedTypeSymbol type,
