@@ -545,7 +545,11 @@ public sealed class SingleBuildTests
             .Should()
             .ContainSingle()
             .Subject;
-        var appStamps = Directory.GetFiles(app, "stamp.minimaljson", SearchOption.AllDirectories);
+        var appStamp = Directory
+            .GetFiles(app, "stamp.minimaljson", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle("App must write stamp.minimaljson even without a serializer context")
+            .Subject;
         var libDll = Directory
             .GetFiles(Path.Combine(lib, "bin"), "Lib.dll", SearchOption.AllDirectories)
             .Should()
@@ -559,12 +563,14 @@ public sealed class SingleBuildTests
 
         var libStampTime = File.GetLastWriteTimeUtc(libStamp);
         var libDllTime = File.GetLastWriteTimeUtc(libDll);
+        var appStampTime = File.GetLastWriteTimeUtc(appStamp);
         var appDllTime = File.GetLastWriteTimeUtc(appDll);
-        var appStampTimes = appStamps
-            .Select(p => (p, t: File.GetLastWriteTimeUtc(p)))
-            .ToArray();
 
-        var incremental = _feed.Dotnet(app, "build -v:n --nologo");
+        // App only: Lib skip messages must not satisfy the incremental assertions.
+        var incremental = _feed.Dotnet(
+            app,
+            "build -v:n --nologo -p:BuildProjectReferences=false"
+        );
         incremental.ExitCode.Should().Be(0, because: incremental.Output);
         incremental
             .Output.Should()
@@ -581,11 +587,8 @@ public sealed class SingleBuildTests
 
         File.GetLastWriteTimeUtc(libStamp).Should().Be(libStampTime);
         File.GetLastWriteTimeUtc(libDll).Should().Be(libDllTime);
+        File.GetLastWriteTimeUtc(appStamp).Should().Be(appStampTime);
         File.GetLastWriteTimeUtc(appDll).Should().Be(appDllTime);
-        foreach (var (path, time) in appStampTimes)
-        {
-            File.GetLastWriteTimeUtc(path).Should().Be(time, because: path);
-        }
     }
 
     private static void WriteModelsAndProgram(string consumer, string models, string program)

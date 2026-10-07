@@ -25,3 +25,71 @@ jobs:
         with:
           name: packages
           path: artifacts/packages
+
+  # global.json pins SDK 11. This job installs only 10.x so the net10.0 task host
+  # actually loads in the .NET 10 MSBuild that consumers on the baseline SDK use.
+  net10-task-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use .NET 10 SDK only
+        run: rm -f global.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Pack net10.0 package
+        run: |
+          dotnet pack src/MinimalSerializers.Json/MinimalSerializers.Json.csproj \
+            -c Release \
+            -m:1 \
+            -o artifacts/packages \
+            -p:TargetFrameworks=net10.0
+      - name: Build net10.0 consumer
+        run: |
+          root="${RUNNER_TEMP}/net10-consumer"
+          mkdir -p "$root"
+          feed="${GITHUB_WORKSPACE}/artifacts/packages"
+          cat > "$root/NuGet.Config" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="local" value="${feed}" />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+          </configuration>
+          EOF
+          cat > "$root/Consumer.csproj" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+            </PropertyGroup>
+          </Project>
+          EOF
+          cat > "$root/Models.cs" <<'EOF'
+          using System.Runtime.Serialization;
+          using System.Text.Json.Serialization;
+          using MinimalSerializers.Json;
+
+          [DataContract]
+          public sealed class ItemDto
+          {
+              [DataMember] public required string Name { get; init; }
+          }
+
+          [MinimalJsonSerializerContext]
+          public partial class AppJsonContext : JsonSerializerContext;
+          EOF
+          cat > "$root/Program.cs" <<'EOF'
+          Console.WriteLine("ok");
+          EOF
+          pack=$(ls "${feed}"/MinimalSerializers.Json.*.nupkg | grep -v symbols | head -n 1)
+          ver=$(basename "$pack" .nupkg | sed 's/^MinimalSerializers.Json.//')
+          dotnet add "$root/Consumer.csproj" package MinimalSerializers.Json --version "$ver" --source "$feed"
+          dotnet build "$root/Consumer.csproj" -v:n --nologo
+          find "$root" -name 'stamp.minimaljson' | grep -q .
+          find "$root" -name '*.MinimalJson.g.cs' | grep -q .
